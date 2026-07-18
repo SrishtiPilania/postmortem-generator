@@ -1,0 +1,84 @@
+{
+  "Cloudflare": {
+    "raw_input": "13:42 UTC - PagerDuty storm. Anycast IP space unreachable from multiple external probes. Global synthetic checks failing.\n13:45 UTC - Edge ingress traffic drops to near 0. Internal monitoring losing telemetry from all edge PoPs. This is not regional.\n13:49 UTC - Trying to SSH to SJC/LHR/NRT edge routers. High packet loss, then total connection timeout. Out-of-band (OOB) console connections also hanging.\n13:54 UTC - Declaring Sev-1/P0. Spinning up incident bridge. Internal comms struggling, switching to backup Zoom.\n13:58 UTC - Transit partners (Level3, Telia) reporting our BGP sessions are down/flapping globally. Edge routers seem completely dead or isolated.\n14:04 UTC - Finally got console access on a router in SJC. Control plane CPU is at 100%, BGP daemon is unresponsive. Console barely accepting keystrokes.\n14:10 UTC - Team looking at recent automated pipeline runs. Attempting hard power cycle of SJC edge router to see if it recovers or stays down.",
+    "description": "A bad config (router rule) caused all of their edge routers to crash, taking down all of Cloudflare.",
+    "link": "https://web.archive.org/web/20211006135542/https://blog.cloudflare.com/todays-outage-post-mortem-82515/",
+    "category": "Config Errors",
+    "generated": {
+      "summary": "A global edge network outage occurred due to a control plane failure on edge routers, resulting in a total loss of ingress traffic and BGP session instability.",
+      "root_cause": "A malformed automated configuration deployment triggered a control plane CPU exhaustion spike across the global edge router fleet, rendering BGP daemons unresponsive and causing BGP sessions to flap or fail.",
+      "timeline": [
+        "13:42 UTC: Global synthetic checks and Anycast IP space unreachable; PagerDuty alerts triggered.",
+        "13:45 UTC: Edge ingress traffic dropped to near zero; internal telemetry from edge PoPs lost.",
+        "13:49 UTC: SSH and OOB console connections to edge routers became unresponsive.",
+        "13:54 UTC: Incident declared as Sev-1/P0; bridge established.",
+        "13:58 UTC: Transit partners confirmed global BGP session failure.",
+        "14:04 UTC: OOB console access confirmed SJC router control plane CPU at 100%.",
+        "14:10 UTC: Investigation shifted to automated configuration pipeline; SJC router hard power cycle initiated."
+      ],
+      "impact": "Global ingress traffic was completely halted, resulting in a total service outage for all end-users during the incident window.",
+      "action_items": [
+        "Implement canary deployments for all network configuration changes to prevent global blast radius.",
+        "Introduce control plane CPU protection policies to prioritize OOB access during resource exhaustion.",
+        "Conduct a root cause analysis of the automated pipeline to identify the specific malformed configuration.",
+        "Establish an out-of-band management network independent of the primary control plane for emergency recovery."
+      ]
+    },
+    "score": 5,
+    "reason": "The AI accurately identifies the core root cause (bad configuration deployment) and the resulting impact (total global edge router failure and outage) described in the ground truth."
+  },
+  "Google": {
+    "raw_input": "08:12 UTC - PagerDuty storm. Multiple core production services reporting connection timeouts. Uptime checks failing for all workloads on GCVE.\n08:17 UTC - Verified network path. Interconnect is up, but cannot ping GCVE vCenter or NSX-T endpoints. Port 443 timed out.\n08:25 UTC - Logged into GCP Console. GCVE portal is completely empty. Private Cloud \"us-east1-pc\" is not listed. No resources visible.\n08:31 UTC - Checking Cloud Audit Logs for IAM deletions. Filter: protoPayload.serviceName=\"vmwareengine.googleapis.com\" and protoPayload.methodName:\"delete\". Zero results. No user initiated a delete.\n08:40 UTC - Opened P1 Support Case with Google (Case #823910). Escalated to TAM.\n08:52 UTC - Internal sync: Confirmed with infra team that no decommissioning work or migrations were scheduled. VMs are completely dark, storage unreachable.\n09:05 UTC - Google Support acknowledges. State on their end shows the private cloud status as \"DELETED\" but they are investigating why it triggered without user intervention.",
+    "description": "Initial GCVE provisioning was performed with a legacy option, which lead to a 'fixed term' contract with automatic deletion at the end of that period.",
+    "link": "https://cloud.google.com/blog/products/infrastructure/details-of-google-cloud-gcve-incident",
+    "category": "Config Errors",
+    "generated": {
+      "summary": "A critical production outage occurred when the GCVE Private Cloud environment was unexpectedly moved to a 'DELETED' state, resulting in total loss of connectivity and resource availability.",
+      "root_cause": "An internal Google Cloud platform error caused the automated deletion of the 'us-east1-pc' Private Cloud environment, despite no user-initiated IAM actions or decommissioning requests.",
+      "timeline": [
+        "08:12 UTC - Widespread connectivity timeouts and failed uptime checks detected for GCVE workloads.",
+        "08:17 UTC - Verified network path failure to vCenter and NSX-T endpoints.",
+        "08:25 UTC - Confirmed GCVE Private Cloud 'us-east1-pc' missing from GCP console.",
+        "08:31 UTC - Audit logs verified no user-initiated deletion commands were issued.",
+        "08:40 UTC - P1 support case opened with Google; escalated to TAM.",
+        "09:05 UTC - Google confirmed internal system state as 'DELETED' and commenced investigation."
+      ],
+      "impact": "All production services hosted on the GCVE 'us-east1-pc' cluster were offline, rendering internal core services and customer-facing workloads unreachable for the duration of the incident.",
+      "action_items": [
+        "Follow up with Google Cloud TAM for the formal Root Cause Analysis (RCA) regarding the phantom deletion.",
+        "Evaluate cross-region disaster recovery options for critical GCVE workloads to mitigate single-provider regional failures.",
+        "Implement enhanced monitoring for GCVE environment status to reduce MTTR in the event of platform-level resource disappearance."
+      ]
+    },
+    "score": 2,
+    "reason": "The AI incorrectly identifies the root cause as an internal platform error rather than the identified legacy configuration option that triggered a fixed-term contract expiration."
+  },
+  "Amazon": {
+    "raw_input": "03:12 UTC - SEV-1 Alert: High rate of DNS resolution timeouts detected in ap-northeast-2. Multiple downstream services reporting database and API connection errors.\n\n03:18 UTC - Internal Slack channels flooding. Core application servers failing target-group health checks because they cannot resolve internal VPC endpoints. Confirmed local VPC resolver (169.254.169.253) is timing out on queries.\n\n03:30 UTC - Paging Networking/Route53 on-call. Testing from sandbox instance in Seoul: dig commands to both public and private zones are failing. Resolver fleet metrics show active host count has plummeted.\n\n03:48 UTC - Confirmed resolver fleet size in ap-northeast-2 is extremely low. Unclear why auto-scaling isn't replacing unhealthy nodes or scaling up to meet demand. \n\n04:15 UTC - Network engineering team initiating manual override to provision additional resolver instances and force capacity back to baseline.\n\n04:30 UTC - New resolver instances reporting healthy. DNS query success rates rising. Downstream service connection errors beginning to clear.\n\n04:36 UTC - All core metrics stabilized. DNS latency back to normal in Seoul region. Declaring mitigation. Handing off to infra team to investigate why the fleet size dropped and remained low.",
+    "description": "A configuration change in the Seoul region incorrectly removed the setting that specifies the minimum healthy hosts for the EC2 DNS resolver fleet, so the system fell back to a very low default. The fleet's healthy host count dropped and in-VPC DNS queries from EC2 instances failed for ~84 minutes until capacity was manually restored. AWS added semantic config validation and per-hour throttling on host removal as remediations.",
+    "link": "https://aws.amazon.com/message/74876-2/",
+    "category": "Config Errors",
+    "generated": {
+      "summary": "A DNS resolution failure in the ap-northeast-2 region caused widespread service outages due to a failure in the auto-scaling mechanism for the internal VPC resolver fleet.",
+      "root_cause": "The VPC resolver fleet in ap-northeast-2 experienced an unexplained failure, and the auto-scaling group failed to replace unhealthy nodes or provision additional capacity, leading to complete DNS resolution timeouts.",
+      "timeline": [
+        "03:12 UTC: High rate of DNS resolution timeouts detected in ap-northeast-2.",
+        "03:18 UTC: Core application servers failed health checks due to inability to resolve internal VPC endpoints.",
+        "03:30 UTC: Resolver fleet metrics confirmed a significant decrease in active host count.",
+        "03:48 UTC: Confirmed auto-scaling was not replacing unhealthy nodes.",
+        "04:15 UTC: Network engineering initiated manual capacity provisioning.",
+        "04:30 UTC: New resolver instances stabilized and DNS success rates recovered.",
+        "04:36 UTC: Full service restoration and mitigation declared."
+      ],
+      "impact": "Users in the ap-northeast-2 region experienced severe service degradation and total loss of connectivity for internal dependencies, affecting multiple downstream database and API services.",
+      "action_items": [
+        "Conduct a post-incident investigation to identify why the auto-scaling group failed to trigger node replacement.",
+        "Implement enhanced alerting for resolver fleet capacity thresholds and auto-scaling health check failures.",
+        "Develop a regional failover or fallback strategy for DNS resolution to mitigate dependency on a single VPC resolver pool.",
+        "Review and update the standard operating procedure for manual resolver fleet provisioning."
+      ]
+    },
+    "score": 2,
+    "reason": "The AI incorrectly attributes the issue to an auto-scaling failure rather than the configuration change that removed the minimum healthy host setting, missing the critical root cause."
+  }
+}

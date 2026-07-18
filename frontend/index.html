@@ -148,6 +148,13 @@
 const API_BASE = "http://127.0.0.1:5000";
 let incidents = [];
 let selectedIncident = null;
+let demoCache = {};
+
+// Load the local backup cache, silently. If the file doesn't exist, this just does nothing.
+fetch("demo_cache.json")
+  .then(r => r.json())
+  .then(data => { demoCache = data; })
+  .catch(() => { demoCache = {}; });
 
 async function loadIncidents() {
   try {
@@ -203,6 +210,24 @@ function renderRealCard(description, link) {
     </div>`;
 }
 
+function showCachedFallback() {
+  const cached = demoCache[selectedIncident.company];
+  const compareContainer = document.getElementById("compare-container");
+  compareContainer.className = "compare";
+  compareContainer.innerHTML =
+    renderGeneratedCard(cached.generated) +
+    renderRealCard(cached.description, cached.link);
+
+  if (cached.score) {
+    document.getElementById("score-badge").textContent = `Score: ${cached.score}/5`;
+    document.getElementById("score-reason").textContent = cached.reason || "";
+    document.getElementById("score-container").style.display = "block";
+  }
+
+  document.getElementById("loading").style.display = "none";
+  compareContainer.style.display = "grid";
+}
+
 document.getElementById("generate-btn").addEventListener("click", async () => {
   const notes = document.getElementById("notes").value.trim();
   if (!notes) {
@@ -213,6 +238,7 @@ document.getElementById("generate-btn").addEventListener("click", async () => {
   document.getElementById("screen-input").classList.remove("active");
   document.getElementById("screen-output").classList.add("active");
   document.getElementById("loading").style.display = "block";
+  document.getElementById("loading").textContent = "Generating...";
   document.getElementById("compare-container").style.display = "none";
   document.getElementById("score-container").style.display = "none";
 
@@ -225,8 +251,7 @@ document.getElementById("generate-btn").addEventListener("click", async () => {
     const generated = await genRes.json();
 
     if (generated.error) {
-      document.getElementById("loading").textContent = "Error: " + generated.error;
-      return;
+      throw new Error(generated.error);
     }
 
     const compareContainer = document.getElementById("compare-container");
@@ -260,8 +285,12 @@ document.getElementById("generate-btn").addEventListener("click", async () => {
     compareContainer.style.display = "grid";
 
   } catch (e) {
-    document.getElementById("loading").textContent = "Error connecting to backend. Is app.py running?";
     console.error(e);
+    if (selectedIncident && demoCache[selectedIncident.company]) {
+      showCachedFallback();
+    } else {
+      document.getElementById("loading").textContent = "Error connecting to backend. Is app.py running?";
+    }
   }
 });
 
