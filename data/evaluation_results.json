@@ -1,0 +1,847 @@
+[
+  {
+    "company": "Allegro",
+    "category": "Config Errors",
+    "link": "https://allegro.tech/2018/08/postmortem-why-allegro-went-down.html",
+    "real_description": "E-commerce site went down after a sudden traffic spike caused by a marketing campaign. The outage was caused by a configuration error in cluster resource management which prevented more service instances from starting even though hardware resources were available.",
+    "raw_input": "10:02 UTC - PagerDuty: CRITICAL - High error rate on web-gateway. 502/503 errors spiking on checkout page.\n10:05 UTC - Grafana shows incoming traffic jumped 5x in the last 10 minutes. Looks like the marketing promo email just went out. \n10:09 UTC - Site is sluggish/unresponsive. Checking Kubernetes. HPA (Horizontal Pod Autoscaler) is attempting to scale target deployments, but replica count is stuck.\n10:14 UTC - Kube-scheduler shows multiple pods for `web-frontend` and `order-service` stuck in \"Pending\" state.\n10:19 UTC - Checking node capacity. Cluster VM metrics look fine—CPU at 42%, Memory at 50%. There is plenty of bare metal headroom, but new pods are still refusing to schedule.\n10:25 UTC - Attempting manual scale-up of `web-frontend` deployment. Replicas still won't spin up. Checking event logs: \"0/12 nodes are available...\" but no clear reason why. \n10:30 UTC - Paging Infra/Platform team. Database and cache layers are healthy, but app layer is starved and can't scale to meet the traffic. Still triaging scheduler issues.",
+    "generated_postmortem": {
+      "summary": "The web-gateway experienced elevated 502/503 errors during a marketing-driven traffic spike because the Kubernetes cluster failed to schedule new pods despite available node resources.",
+      "root_cause": "The Kubernetes scheduler failed to place new pods due to an undisclosed resource constraint or configuration issue preventing pod-to-node affinity/taints, despite overall cluster capacity being sufficient.",
+      "timeline": [
+        "10:02 UTC: High error rate alert triggered on web-gateway.",
+        "10:05 UTC: Traffic spiked 5x due to a marketing email launch.",
+        "10:09 UTC: HPA detected demand but failed to increase replica counts.",
+        "10:14 UTC: Pods identified as 'Pending' in the scheduler.",
+        "10:19 UTC: Confirmed cluster has sufficient hardware headroom.",
+        "10:25 UTC: Manual scaling failed with unclear node availability errors.",
+        "10:30 UTC: Infra/Platform team engaged to investigate scheduler blocking."
+      ],
+      "impact": "Users were unable to complete checkouts during the traffic surge, resulting in significant service unavailability and potential revenue loss.",
+      "action_items": [
+        "Perform a deep-dive audit of Kubernetes scheduler logs to identify why nodes were marked unavailable.",
+        "Implement automated capacity stress testing to simulate marketing-scale traffic surges.",
+        "Review and refine HPA threshold settings to ensure proactive scaling before saturation occurs.",
+        "Develop improved observability dashboards for scheduler-specific blocking reasons and event errors."
+      ]
+    },
+    "score": 5,
+    "judge_reason": "The AI accurately identifies the traffic spike, the resource management configuration failure, and the discrepancy between available hardware and service capacity."
+  },
+  {
+    "company": "Amazon",
+    "category": "Config Errors",
+    "link": "https://aws.amazon.com/message/74876-2/",
+    "real_description": "A configuration change in the Seoul region incorrectly removed the setting that specifies the minimum healthy hosts for the EC2 DNS resolver fleet, so the system fell back to a very low default. The fleet's healthy host count dropped and in-VPC DNS queries from EC2 instances failed for ~84 minutes until capacity was manually restored. AWS added semantic config validation and per-hour throttling on host removal as remediations.",
+    "raw_input": "03:12 UTC - SEV-1 Alert: High rate of DNS resolution timeouts detected in ap-northeast-2. Multiple downstream services reporting database and API connection errors.\n\n03:18 UTC - Internal Slack channels flooding. Core application servers failing target-group health checks because they cannot resolve internal VPC endpoints. Confirmed local VPC resolver (169.254.169.253) is timing out on queries.\n\n03:30 UTC - Paging Networking/Route53 on-call. Testing from sandbox instance in Seoul: dig commands to both public and private zones are failing. Resolver fleet metrics show active host count has plummeted.\n\n03:48 UTC - Confirmed resolver fleet size in ap-northeast-2 is extremely low. Unclear why auto-scaling isn't replacing unhealthy nodes or scaling up to meet demand. \n\n04:15 UTC - Network engineering team initiating manual override to provision additional resolver instances and force capacity back to baseline.\n\n04:30 UTC - New resolver instances reporting healthy. DNS query success rates rising. Downstream service connection errors beginning to clear.\n\n04:36 UTC - All core metrics stabilized. DNS latency back to normal in Seoul region. Declaring mitigation. Handing off to infra team to investigate why the fleet size dropped and remained low.",
+    "generated_postmortem": {
+      "summary": "A DNS resolution failure in the ap-northeast-2 region caused widespread connectivity issues for internal services due to a critical drop in available VPC resolver fleet capacity.",
+      "root_cause": "A failure in the auto-scaling mechanism prevented the VPC resolver fleet from replacing unhealthy nodes or scaling to meet traffic demands, leading to a critical capacity depletion.",
+      "timeline": [
+        "03:12 UTC: SEV-1 alert triggered for DNS resolution timeouts in ap-northeast-2.",
+        "03:18 UTC: Confirmed internal VPC resolver (169.254.169.253) was failing to resolve internal endpoints.",
+        "03:30 UTC: Networking team paged; confirmed DNS resolution failures and identified a drop in resolver fleet host count.",
+        "03:48 UTC: Confirmed auto-scaling failure in the resolver fleet.",
+        "04:15 UTC: Network engineering performed manual override to provision additional resolver instances.",
+        "04:30 UTC: New instances reported healthy and DNS resolution success rates stabilized.",
+        "04:36 UTC: Full service restoration confirmed and incident mitigated."
+      ],
+      "impact": "Core application servers in ap-northeast-2 were unable to resolve internal VPC endpoints, resulting in widespread database and API connection errors across downstream services.",
+      "action_items": [
+        "Investigate and remediate the root cause of the VPC resolver auto-scaling failure.",
+        "Implement proactive monitoring and alerting for VPC resolver fleet health and capacity margins.",
+        "Develop a runbook for manual emergency provisioning of resolver capacity to reduce MTTR."
+      ]
+    },
+    "score": 2,
+    "judge_reason": "The AI incorrectly identified the root cause as an auto-scaling mechanism failure rather than the actual root cause, which was a configuration change error that removed health-check thresholds."
+  },
+  {
+    "company": "CircleCI",
+    "category": "Config Errors",
+    "link": "https://discuss.circleci.com/t/incident-report-november-8-2021-jobs-stuck-in-a-not-running-state/41890",
+    "real_description": "A deploy changed the type of a field in the PostgreSQL database used by the job-distribution service. Newly-written rows used the new type and old rows used the old type, so the distributor's strict schema validation failed on each scan and it stopped distributing work. Rolling back made the rows written between the two deploys unreadable, so distribution kept failing; recovery required hand-deploying a build that ignored the offending field, plus manual scaling.",
+    "raw_input": "14:15 UTC - ALERT: PagerDuty Sev-1 - JobDistributorQueueLengthSpike. Processing rate has dropped to 0/sec. Backlog is climbing rapidly.\n\n14:18 UTC - Checking logs for job-distribution-service. Seeing heavy flood of validation errors: \"Fatal: failing schema validation on row scan, aborting batch.\" Appears to be crashing loop on the main poll loop.\n\n14:22 UTC - Checking change logs. Deploy `v2.44.1` finished at 14:08 UTC. Fits the timeline perfectly. Initiating rollback of job-distribution-service to `v2.44.0`.\n\n14:31 UTC - Rollback to `v2.44.0` complete. However, error rate is still 100% and queue is still stalling. Logs still showing schema validation failures, but the error message format has slightly changed to \"DeserializationError: unexpected field format\".\n\n14:38 UTC - Escalating to database-oncall and backend-platform-leads. It looks like the database state is corrupt or there are poison pills. Distributor is stuck on specific rows in the jobs table and refusing to proceed. \n\n14:48 UTC - DB-oncall confirms the database itself is healthy but we have a mix of unreadable records. Rolling back the service made things worse as it now can't parse rows written during the brief `v2.44.1` window.\n\n14:58 UTC - Preparing emergency hotfix `v2.44.2-noop-field` to force the distributor to ignore the failing schema field entirely so it can bypass validation and unblock queue processing.\n\n15:09 UTC - Hotfix deployed. Errors stopped. Queue processing has resumed, but backlog is at 450k jobs. Manually scaling distributor replicas from 4 to 20 to process the lag.",
+    "generated_postmortem": {
+      "summary": "The job-distribution-service experienced a total outage due to a schema mismatch introduced in v2.44.1, which corrupted the job queue with poison pill records.",
+      "root_cause": "A breaking schema change in deployment v2.44.1 introduced unparseable records into the jobs table, and a subsequent rollback failed because older service versions could not process the newly corrupted data format.",
+      "timeline": [
+        "14:08 UTC: Deployment v2.44.1 finished",
+        "14:15 UTC: JobDistributorQueueLengthSpike alert triggered",
+        "14:22 UTC: Rollback to v2.44.0 initiated",
+        "14:31 UTC: Rollback completed; service remained in failure state due to incompatibility with v2.44.1-written records",
+        "14:48 UTC: Database team confirmed poison pill records were present",
+        "15:09 UTC: Hotfix v2.44.2-noop-field deployed, successfully bypassing schema validation and unblocking the queue"
+      ],
+      "impact": "Job processing was halted for approximately 54 minutes, resulting in a backlog of 450,000 jobs and degraded latency for downstream systems.",
+      "action_items": [
+        "Implement forward-compatible schema migration strategies to prevent deployment rollbacks from failing on new data formats",
+        "Add automated 'poison pill' detection logic to the job distributor to skip malformed records instead of crashing the process",
+        "Establish a pre-deployment data validation suite to detect schema incompatibilities before traffic is shifted to new versions",
+        "Improve rollback procedures to include verification of data compatibility with the target stable version"
+      ]
+    },
+    "score": 4,
+    "judge_reason": "The AI accurately identifies the root cause as a schema mismatch and the failure of the rollback process, though it incorrectly characterizes the data as 'corrupted' rather than simply being a type-incompatibility issue."
+  },
+  {
+    "company": "CircleCI",
+    "category": "Config Errors",
+    "link": "https://discuss.circleci.com/t/post-incident-report-april-4-2025-circleci-ui-loading-build-triggering-issues/53208",
+    "real_description": "An IAM-role gap permitted out-of-band changes to AWS WAF outside of CircleCI's Terraform pipeline; an operator performing what they believed were read-only investigation actions modified WAF in a way that began blocking legitimate traffic to the `api.circleci.com` and `circleci.com` CloudFront distributions. Because the change wasn't recorded in Terraform, responders deprioritized WAF as a suspect and chased CORS errors and recent deploys until automated drift detection surfaced the discrepancy.",
+    "raw_input": "14:12 UTC - PagerDuty alert: High 5xx error rate on api.circleci.com. Traffic dropping ~40%.\n\n14:18 UTC - Investigating recent deploys. No obvious regressions in main branch or recent commits. Reverting last deploy just in case.\n\n14:35 UTC - Rollback complete, no change in error rate. Users reporting \"Access Denied\" and CORS errors on frontend. \n\n14:48 UTC - CloudFront metrics show significant spike in 403s. Checking WAF configurations via CLI, but look okay? Terraform shows no changes.\n\n15:02 UTC - Suspecting a potential regional AWS networking issue or internal load balancer misconfiguration. Escalating to SRE lead.\n\n15:20 UTC - CORS errors persist across all regions. Validating service mesh health, but nodes appear healthy.\n\n15:45 UTC - Automated drift detection just triggered: AWS WAF state does not match Terraform definition. Something changed the WAF policy out-of-band. Investigating who/what touched the configuration.",
+    "generated_postmortem": {
+      "summary": "The api.circleci.com service experienced a major outage characterized by 5xx errors and CORS failures caused by an unauthorized, out-of-band modification to AWS WAF policies.",
+      "root_cause": "An out-of-band manual configuration change to the AWS WAF bypassed Terraform controls, resulting in a policy mismatch that blocked legitimate API traffic.",
+      "timeline": [
+        "14:12 UTC: PagerDuty triggered for high 5xx error rates.",
+        "14:18 UTC: Investigation of recent deploys initiated; rollback performed as a precaution.",
+        "14:35 UTC: Rollback confirmed ineffective; users reported widespread Access Denied and CORS errors.",
+        "14:48 UTC: CloudFront 403 spikes identified; manual WAF inspection appeared normal.",
+        "15:02 UTC: Escalation to SRE lead for suspected regional or networking issues.",
+        "15:45 UTC: Drift detection confirmed that AWS WAF state deviated from Terraform configuration."
+      ],
+      "impact": "Approximately 40% of traffic to api.circleci.com was blocked for the duration of the incident, resulting in frontend Access Denied and CORS failures for users.",
+      "action_items": [
+        "Identify the identity and process responsible for the out-of-band WAF modification.",
+        "Implement stricter AWS IAM policies to restrict manual modifications of WAF resources.",
+        "Configure automated remediation to trigger immediate alerts or auto-revert when WAF drift is detected.",
+        "Conduct a post-incident review to improve mean time to detect (MTTD) for configuration drift."
+      ]
+    },
+    "score": 4,
+    "judge_reason": "The AI accurately identifies the out-of-band WAF change and its impact, but it fails to mention the human operator error or the critical detail regarding why the root cause was initially obscured from responders."
+  },
+  {
+    "company": "Cloudflare",
+    "category": "Config Errors",
+    "link": "https://web.archive.org/web/20211006135542/https://blog.cloudflare.com/todays-outage-post-mortem-82515/",
+    "real_description": "A bad config (router rule) caused all of their edge routers to crash, taking down all of Cloudflare.",
+    "raw_input": "13:42 UTC - PagerDuty storm. Anycast IP space unreachable from multiple external probes. Global synthetic checks failing.\n13:45 UTC - Edge ingress traffic drops to near 0. Internal monitoring losing telemetry from all edge PoPs. This is not regional.\n13:49 UTC - Trying to SSH to SJC/LHR/NRT edge routers. High packet loss, then total connection timeout. Out-of-band (OOB) console connections also hanging.\n13:54 UTC - Declaring Sev-1/P0. Spinning up incident bridge. Internal comms struggling, switching to backup Zoom.\n13:58 UTC - Transit partners (Level3, Telia) reporting our BGP sessions are down/flapping globally. Edge routers seem completely dead or isolated.\n14:04 UTC - Finally got console access on a router in SJC. Control plane CPU is at 100%, BGP daemon is unresponsive. Console barely accepting keystrokes.\n14:10 UTC - Team looking at recent automated pipeline runs. Attempting hard power cycle of SJC edge router to see if it recovers or stays down.",
+    "generated_postmortem": {
+      "summary": "A global edge network outage occurred due to a control plane failure triggered by a faulty automated configuration deployment, leading to BGP session collapse and total traffic ingress loss.",
+      "root_cause": "An automated pipeline deployment pushed a configuration change that induced a CPU-exhaustion loop on edge router control planes, rendering them unresponsive to BGP updates and remote management.",
+      "timeline": [
+        "13:42 UTC: Global synthetic checks and Anycast IP space reported unreachable.",
+        "13:45 UTC: Edge ingress traffic drops to zero; internal telemetry lost.",
+        "13:49 UTC: Remote SSH and OOB console access to edge routers begin to fail.",
+        "13:54 UTC: Sev-1/P0 declared; incident bridge established.",
+        "13:58 UTC: Transit partners confirm global BGP flapping and session termination.",
+        "14:04 UTC: SJC console access regained; confirmed 100% control plane CPU saturation.",
+        "14:10 UTC: Team initiates investigation into recent automated pipeline runs and power-cycle recovery."
+      ],
+      "impact": "Complete loss of global edge network connectivity resulting in a total service outage for all external-facing traffic.",
+      "action_items": [
+        "Implement rate-limiting for automated configuration deployments to prevent global blast radius.",
+        "Introduce canary deployment stages for all network configuration changes across limited PoPs before global rollout.",
+        "Enhance out-of-band management redundancy to ensure accessibility during control plane saturation.",
+        "Develop automated roll-back triggers for BGP state anomalies detected by monitoring systems."
+      ]
+    },
+    "score": 5,
+    "judge_reason": "The AI accurately identifies the core failure mechanism (bad configuration causing router crashes) and its resulting global impact, providing a more detailed technical explanation that remains consistent with the ground truth."
+  },
+  {
+    "company": "Cloudflare",
+    "category": "Config Errors",
+    "link": "https://web.archive.org/web/20211016040522/https://blog.cloudflare.com/cloudflare-outage-on-july-17-2020/",
+    "real_description": "During a maintenance of their private backbone network, an engineer made a typo in the Atlanta datacenter network configuration, causing all traffic coming from America and Europe flowing to this only datacenter, crushing it.",
+    "raw_input": "14:10 UTC - PagerDuty storm. Multiple alerts for ATL edge ingress capacity exceeding 95%. Gateway timeout rates (502/504) spiking for all AMER and EMEA users.\n\n14:15 UTC - Traffic charts show massive, anomalous step-function spike in ingress traffic to ATL datacenter. EMEA and other AMER edge routers showing near-zero traffic.\n\n14:22 UTC - ATL load balancers are OOMing and dropping packets under extreme load. Paged NetOps-Oncall. Investigating potential DDoS.\n\n14:30 UTC - NetOps confirms no DDoS. Backbone traffic flows are totally misaligned. All WAN traffic is converging on ATL. Correlates with the backbone maintenance window that started at 14:00.\n\n14:38 UTC - Tried to manually swing DNS/gslb to bypass ATL, but backbone routes are overriding. Internal services in ATL completely unresponsive.\n\n14:45 UTC - NetOps identifying routing anomaly in ATL edge routers. Initiating emergency rollback of recent network configuration changes.",
+    "generated_postmortem": {
+      "summary": "A backbone routing misconfiguration caused global ingress traffic to converge on the ATL datacenter, resulting in a capacity overload and widespread 502/504 errors.",
+      "root_cause": "A network configuration change deployed during a 14:00 UTC maintenance window triggered an erroneous BGP routing update, forcing all WAN traffic to route through the ATL edge routers.",
+      "timeline": [
+        "14:00 UTC: Backbone maintenance window begins.",
+        "14:10 UTC: ATL ingress capacity exceeds 95%; PagerDuty alerts fire for AMER/EMEA gateway timeouts.",
+        "14:15 UTC: Traffic charts reveal anomalous traffic convergence on ATL and near-zero traffic at other global edge routers.",
+        "14:22 UTC: ATL load balancers enter OOM state; NetOps paged.",
+        "14:30 UTC: NetOps confirms no DDoS; traffic convergence correlated to maintenance window.",
+        "14:38 UTC: DNS/GSLB failover attempts fail due to underlying routing override.",
+        "14:45 UTC: NetOps identifies routing anomaly and initiates emergency configuration rollback."
+      ],
+      "impact": "Global users in AMER and EMEA experienced severe latency and service unavailability (502/504 errors) due to the total saturation of the ATL datacenter ingress.",
+      "action_items": [
+        "Perform a post-incident audit of the network configuration deployment pipeline.",
+        "Implement automated guardrails to detect and block BGP route updates that shift excessive traffic to a single point of failure.",
+        "Review and update the GSLB failover playbook to ensure DNS redirection functions independently of backbone routing states.",
+        "Establish stricter traffic-shaping limits at the edge to prevent a single datacenter from collapsing during routing anomalies."
+      ]
+    },
+    "score": 5,
+    "judge_reason": "The AI accurately identifies the specific technical cause (routing misconfiguration) and the precise impact (geographic traffic convergence saturating the Atlanta datacenter) described in the original report."
+  },
+  {
+    "company": "Cloudflare",
+    "category": "Config Errors",
+    "link": "https://web.archive.org/web/20220621124002/https://blog.cloudflare.com/cloudflare-outage-on-june-21-2022/",
+    "real_description": "An incorrect ordering of the disabled BGP advertised prefixes caused malfunction on 19 datacenters.",
+    "raw_input": "13:47 UTC - PagerDuty storm. Global Anycast pingdom alerts firing. Heavy packet loss reported on edge.\n\n13:51 UTC - Edge health checks failing for multiple regions. Confirmed 19 edge datacenters are completely unreachable via public internet. Internal backbone still up but edge is isolated.\n\n13:56 UTC - External traceroutes to affected DCs are dying at upstream Tier 1 transits. Looks like massive routing withdrawal. Checking transit provider status pages - no global outages reported.\n\n14:02 UTC - Netops escalated. BGP session monitoring shows prefix count dropped to 0 for the affected locations. Peers are not receiving our anycast routes.\n\n14:08 UTC - Correlating with automated change management. Provisioning pipeline ran a routine prefix-list maintenance job at 13:45 UTC. \n\n14:15 UTC - Initiating emergency rollback of the prefix-list generation run and forcing manual push of last known good configuration to edge routers.",
+    "generated_postmortem": {
+      "summary": "Nineteen edge datacenters became unreachable globally due to a BGP route withdrawal caused by a faulty automated prefix-list maintenance job.",
+      "root_cause": "An automated provisioning pipeline job pushed a malformed prefix-list update that resulted in a complete BGP session prefix count drop, causing peers to stop receiving anycast routes.",
+      "timeline": [
+        "13:45 UTC: Automated prefix-list maintenance job executed.",
+        "13:47 UTC: Global Anycast alerts triggered due to packet loss.",
+        "13:51 UTC: 19 edge datacenters confirmed unreachable via public internet.",
+        "13:56 UTC: Traceroute analysis identified a massive BGP routing withdrawal.",
+        "14:02 UTC: Netops confirmed BGP prefix count dropped to zero at affected sites.",
+        "14:08 UTC: Change correlated to the 13:45 UTC provisioning job.",
+        "14:15 UTC: Emergency rollback and manual configuration push initiated."
+      ],
+      "impact": "Significant service degradation for users globally; 19 edge datacenters were isolated from the public internet for approximately 30 minutes.",
+      "action_items": [
+        "Implement automated validation checks for prefix-list changes prior to deployment.",
+        "Add 'canary' deployment steps to the provisioning pipeline for routing updates.",
+        "Improve monitoring alerting for sudden drops in BGP prefix advertisements to provide faster detection."
+      ]
+    },
+    "score": 3,
+    "judge_reason": "While the AI correctly identifies the 19 datacenters and the BGP context, it hallucinates specific technical details like 'complete BGP session prefix count drop' and 'malformed prefix-list update' that are not supported by the ground truth."
+  },
+  {
+    "company": "Cloudflare",
+    "category": "Config Errors",
+    "link": "https://web.archive.org/web/20221112015610/https://blog.cloudflare.com/partial-cloudflare-outage-on-october-25-2022/",
+    "real_description": "A change to our Tiered Cache system caused some requests to fail for users with status code 530. The impact lasted for almost six hours in total. We estimate that about 5% of all requests failed at peak. Because of the complexity of our system and a blind spot in our tests, we did not spot this when the change was released to our test environment.",
+    "raw_input": "13:12 UTC - PagerDuty: Edge-Gateway-5xx-Spike firing globally. Seeing about 1.5% increase in 530 errors.\n13:30 UTC - Support escalating. Multiple customer reports of intermittent 530 errors. Edge logs show failures during internal proxy pass.\n14:15 UTC - Peak error rate hitting ~5% global. Grafana dashboard showing 530s are highly concentrated on requests that query parent cache nodes. Origins healthy.\n15:45 UTC - Traffic routing changes attempted to bypass impacted PoPs, but errors persist. This is an internal routing/cache issue, not external network. Escalating to @core-cache.\n17:10 UTC - Identifying candidate release deployed earlier today. Preparing rollback of the edge proxy binary.\n18:55 UTC - Rollback finished propagating globally. 530 errors back to baseline. Closing incident.",
+    "generated_postmortem": {
+      "summary": "A global spike in 530 errors was caused by a faulty edge proxy binary update, leading to failures in communication between edge nodes and parent cache nodes.",
+      "root_cause": "A defective release of the edge proxy binary introduced a regression in the internal proxy-pass logic when querying parent cache nodes.",
+      "timeline": [
+        "13:12 UTC: PagerDuty alert triggered for Edge-Gateway-5xx-Spike showing 1.5% error rate.",
+        "13:30 UTC: Support reported customer impact; logs confirmed proxy-pass failures.",
+        "14:15 UTC: Error rate peaked at 5%; issue isolated to parent cache node requests.",
+        "15:45 UTC: Initial attempts to reroute traffic failed; issue escalated to core-cache team.",
+        "17:10 UTC: Faulty binary identified and rollback initiated.",
+        "18:55 UTC: Rollback completed globally; error rates returned to baseline."
+      ],
+      "impact": "Global customer base experienced intermittent 530 errors when accessing cached content for approximately 5 hours and 43 minutes, peaking at a 5% error rate.",
+      "action_items": [
+        "Implement automated canary deployment validation for all proxy binary releases.",
+        "Improve observability dashboards to alert specifically on proxy-pass failure patterns.",
+        "Conduct a post-implementation review of the deployment rollback process to reduce time-to-remediate."
+      ]
+    },
+    "score": 4,
+    "judge_reason": "The AI accurately captures the incident impact and duration but adds specific technical details regarding the 'edge proxy binary' that were not mentioned in the source ground truth."
+  },
+  {
+    "company": "Cloudflare",
+    "category": "Config Errors",
+    "link": "https://blog.cloudflare.com/cloudflare-incident-on-january-24th-2023/",
+    "real_description": "Several Cloudflare services became unavailable for 121 minutes on January 24, 2023 due to an error releasing code that manages service tokens. The incident degraded a wide range of Cloudflare products including aspects of our Workers platform, our Zero Trust solution, and control plane functions in our content delivery network (CDN).",
+    "raw_input": "16:14 UTC - PagerDuty storm. Alerts firing for Zero Trust authentication failures globally. Multiple internal alerts for API gateway 502/503 errors.\n16:22 UTC - Dashboard is unresponsive for multiple tenants. Workers deployments failing with 500 Internal Server Error. Escalating to Sev-1.\n16:45 UTC - Zero Trust users reporting being locked out of Access applications and WARP client failing to connect. Control plane functions (DNS updates, cache purges) are queuing up and timing out. Edge traffic routing is healthy, but anything requiring internal authorization is failing.\n17:15 UTC - Incident response bridge active. Isolating the issue to the internal identity and token validation services. Seeing a massive spike in validation errors between internal microservices.\n17:48 UTC - Investigating recent change logs. Database connections are stable but the internal auth API is systematically rejecting requests with authorization errors. Looking at active deploys in the last hour.\n18:05 UTC - Initiating rollback of the latest deployment to the control plane management services.\n18:12 UTC - Rollback in progress. Zero Trust authentication success rates are recovering. Workers API calls starting to succeed. Control plane backlog clearing.",
+    "generated_postmortem": {
+      "summary": "A faulty deployment to the control plane management services caused widespread authentication failures and internal API errors for Zero Trust and Workers, leading to a global service outage.",
+      "root_cause": "A recent deployment to the internal identity and token validation services introduced a regression that caused systematic authorization errors between microservices.",
+      "timeline": [
+        "16:14 UTC: PagerDuty alerts fire for Zero Trust authentication and API gateway 502/503 errors.",
+        "16:22 UTC: Dashboard becomes unresponsive and Workers deployments begin failing; incident escalated to Sev-1.",
+        "16:45 UTC: Users report widespread lockouts; control plane tasks begin timing out.",
+        "17:15 UTC: Root cause isolated to internal identity and token validation services.",
+        "17:48 UTC: Investigation confirms internal auth API rejecting requests; rollback of management services initiated.",
+        "18:05 UTC: Rollback initiated for control plane management services.",
+        "18:12 UTC: Rollback complete; authentication success rates and service functionality begin recovering."
+      ],
+      "impact": "Global users were locked out of Access applications and the WARP client, while internal teams were unable to perform Workers deployments, DNS updates, or cache purges.",
+      "action_items": [
+        "Implement automated canary analysis for control plane deployments to catch auth-related regressions earlier.",
+        "Add more granular observability and alerting for token validation service latency and error rates.",
+        "Conduct a post-incident review to improve the validation process for configuration changes impacting the identity stack."
+      ]
+    },
+    "score": 4,
+    "judge_reason": "The AI accurately identifies the nature of the incident and impact, but it slightly generalizes the root cause as a regression in identity services rather than specifically citing the code release for service token management."
+  },
+  {
+    "company": "Cloudflare",
+    "category": "Config Errors",
+    "link": "https://blog.cloudflare.com/1-1-1-1-lookup-failures-on-october-4th-2023/",
+    "real_description": "On 4 October 2023, Cloudflare experienced DNS resolution problems starting at 07:00 UTC and ending at 11:00 UTC. Some users of 1.1.1.1 or products like WARP, Zero Trust, or third party DNS resolvers which use 1.1.1.1 may have received SERVFAIL DNS responses to valid queries. We’re very sorry for this outage. This outage was an internal software error and not the result of an attack. In this blog, we’re going to talk about what the failure was, why it occurred, and what we’re doing to make sure this doesn’t happen again.",
+    "raw_input": "07:05 UTC - PagerDuty storm. Anycast IP 1.1.1.1 reporting massive spike in SERVFAIL responses globally.\n07:15 UTC - WARP and Zero Trust gateways reporting client connection drops. Internal probes to resolver cluster failing health checks.\n07:45 UTC - Escalating to Edge DNS team. Internal test queries directly against recursive resolvers return SERVFAIL for valid external domains. Authoritative DNS path seems healthy.\n08:20 UTC - Checking change logs. No active DNS configuration deployments in the last hour, but checking scheduled software release pipelines. Resolver CPU utilization is spiking.\n09:10 UTC - Initiated traffic drains from heavily affected edge locations. Attempting rolling restart of the local resolver services.\n10:15 UTC - SERVFAIL rates dropping in restarted zones. Pinning resolver daemon to the last-known stable release candidate while monitoring.\n11:00 UTC - All regions recovered. Error rates back to nominal baseline. WARP and Zero Trust telemetry is fully green. Closing active incident, moving to postmortem.",
+    "generated_postmortem": {
+      "summary": "A global DNS resolution outage caused by a spike in SERVFAIL responses affected WARP and Zero Trust gateways, resulting in widespread connectivity issues.",
+      "root_cause": "A recent software release introduced a regression in the recursive resolver daemon, causing excessive CPU utilization and subsequent health check failures across the edge resolver cluster.",
+      "timeline": [
+        "07:05 UTC: Global spike in SERVFAIL responses detected on Anycast IP 1.1.1.1.",
+        "07:15 UTC: WARP and Zero Trust gateways report connection drops due to resolver health check failures.",
+        "07:45 UTC: Edge DNS team confirms failure is localized to recursive resolvers while authoritative paths remain healthy.",
+        "08:20 UTC: Investigation identifies high CPU utilization on resolvers linked to a recent software release.",
+        "09:10 UTC: Traffic drains initiated and rolling restarts of resolver services begin.",
+        "10:15 UTC: SERVFAIL rates stabilize after pinning resolvers to a known stable release candidate.",
+        "11:00 UTC: Full recovery achieved and all telemetry returned to nominal levels."
+      ],
+      "impact": "Global users experienced intermittent DNS resolution failures, impacting connectivity for WARP and Zero Trust services for approximately four hours.",
+      "action_items": [
+        "Perform a post-incident analysis on the flawed software release to identify why the regression bypassed canary testing.",
+        "Enhance recursive resolver health check monitoring to trigger automated traffic rerouting before service-wide degradation.",
+        "Implement stricter automated roll-back mechanisms for resolver daemon deployments when CPU thresholds are breached."
+      ]
+    },
+    "score": 3,
+    "judge_reason": "The AI correctly identified the impact and timeframe, but it fabricated a specific root cause regarding a recursive resolver regression and CPU utilization that was not mentioned in the provided source text."
+  },
+  {
+    "company": "Cloudflare",
+    "category": "Config Errors",
+    "link": "https://blog.cloudflare.com/18-november-2025-outage/",
+    "real_description": "On 18 Nov. 2025, a change in permissions in a database in Cloudflare's bot-detection systems caused a file to be output that exceeded the limits of the software that runs that system. That file was propagated througout Cloudflare's network, causing a systemwide outage.",
+    "raw_input": "11:12 UTC - PagerDuty storm. Global alerts for edge HTTP 502/504s. Anycast health checks failing on multiple PoPs.\n11:18 UTC - Escalating to Sev-1. Edge service daemon is crashing in a loop on startup across all datacenters. OOM killer active.\n11:25 UTC - Syslog on edge nodes showing \"fatal: maximum buffer size exceeded\" and \"failed to parse ruleset\" errors during daemon initialization.\n11:34 UTC - Correlating crash timeline with global data sync. A signature update was propagated network-wide at 11:08 UTC.\n11:42 UTC - Confirmed rule-file sync is distributed but edge nodes cannot ingest it. Engine fails to load the file, crashing the main traffic handler.\n11:50 UTC - Attempting emergency bypass of the signature loader. Pushing manual override to force edge nodes to ignore the bad file.\n11:58 UTC - Override applied. Daemon restarts succeeding, global traffic recovering.",
+    "generated_postmortem": {
+      "summary": "A global edge service outage was caused by a malformed security signature update that triggered OOM crashes across all PoPs.",
+      "root_cause": "A corrupted or invalid signature update file exceeded the buffer limit during initialization, causing the edge daemon to crash continuously upon startup.",
+      "timeline": [
+        "11:08 UTC: Bad signature update propagated network-wide.",
+        "11:12 UTC: PagerDuty alert storm triggered by widespread HTTP 502/504 errors.",
+        "11:18 UTC: Confirmed edge service daemon crash loop due to OOM killer.",
+        "11:25 UTC: Logs identified 'maximum buffer size exceeded' and 'failed to parse ruleset' errors.",
+        "11:34 UTC: Confirmed correlation between signature sync and daemon initialization failures.",
+        "11:50 UTC: Emergency override pushed to ignore the bad signature file.",
+        "11:58 UTC: Daemon restarts succeeded and traffic recovered."
+      ],
+      "impact": "Global service outage affecting all traffic handled by the edge network, resulting in widespread 502 and 504 errors for all users.",
+      "action_items": [
+        "Implement a canary deployment process for signature updates to prevent global simultaneous failure.",
+        "Introduce a validation step to verify signature file integrity before ingestion on edge nodes.",
+        "Add 'fail-safe' logic to the daemon to ignore invalid config files rather than crashing the process.",
+        "Develop an automated rollback mechanism for configuration and signature pushes."
+      ]
+    },
+    "score": 2,
+    "judge_reason": "The AI correctly identifies a global outage caused by an oversized file exceeding software limits, but it incorrectly attributes the root cause to a security signature update instead of a database permission change."
+  },
+  {
+    "company": "Datadog",
+    "category": "Config Errors",
+    "link": "https://www.datadoghq.com/blog/2020-09-25-infrastructure-connectivity-issue/",
+    "real_description": "A bad service discovery config in one of the clients brought down service discovery globally when a dependent client went down.",
+    "raw_input": "14:12 UTC - PagerDuty alert: Service Discovery API latency breaching 5s threshold (99th percentile).\n\n14:15 - Monitoring dashboards showing 100% error rate for service resolution requests across all internal clusters.\n\n14:18 - Multiple downstream microservices reporting \"Connection Refused\" and \"DNS Resolution Failed\" in logs.\n\n14:22 - Escalating to Network/Infra team; suspecting potential backbone outage or global load balancer failure.\n\n14:30 - Observed cascading failures: upstream application pods are crashing due to inability to locate dependencies.\n\n14:45 - Attempted manual restart of primary Service Discovery control plane nodes; no change in system-wide error rates.\n\n15:05 - Identifying anomalous request spikes originating from 'auth-client-svc'; isolating that specific client instance.",
+    "generated_postmortem": {
+      "summary": "The Service Discovery API experienced a total outage due to resource exhaustion caused by an anomalous traffic spike from the 'auth-client-svc'.",
+      "root_cause": "The 'auth-client-svc' generated a massive spike in request volume, overwhelming the Service Discovery control plane nodes and triggering a cascading failure across dependent microservices.",
+      "timeline": [
+        "14:12 UTC: PagerDuty alerted on Service Discovery API latency breach.",
+        "14:15 UTC: Total service resolution failure observed across all clusters.",
+        "14:18 UTC: Downstream microservices reported connection and DNS resolution errors.",
+        "14:22 UTC: Incident escalated to Network/Infra team.",
+        "14:30 UTC: Cascading failure triggered crashes in upstream application pods.",
+        "14:45 UTC: Manual restart of control plane nodes proved ineffective.",
+        "15:05 UTC: Identified 'auth-client-svc' as the source of the traffic spike and isolated the instance."
+      ],
+      "impact": "100% loss of service resolution for internal microservices, resulting in widespread cascading failures and service unavailability across the platform for approximately 53 minutes.",
+      "action_items": [
+        "Implement rate limiting on the Service Discovery API to prevent single-client resource exhaustion.",
+        "Introduce circuit breakers in all microservices to handle service discovery failures gracefully without crashing pods.",
+        "Develop automated anomaly detection to identify and isolate noisy clients before they trigger global outages.",
+        "Review and improve Service Discovery scalability and auto-scaling triggers."
+      ]
+    },
+    "score": 1,
+    "judge_reason": "The AI-generated postmortem incorrectly identifies resource exhaustion from a traffic spike as the root cause, whereas the real incident was caused by a misconfiguration in a client."
+  },
+  {
+    "company": "Enom",
+    "category": "Config Errors",
+    "link": "https://enomstatus.com/incidents/03q064h6rb7x",
+    "real_description": "On January 15, 2022, at 9:00 AM ET, Tucows’ engineering team began planned maintenance work to migrate the Enom platform to a new cloud infrastructure. Due to the complexity of the cutover, the team encountered many issues resulting in continuous delays. The maintenance window was extended multiple times to address issues related to data replication, network routing, and DNS resolution issues impacting website accessibility and email delivery.",
+    "raw_input": "14:00 UTC - Maintenance window officially starts. Enom platform migration initiated. Traffic diverted, DBs set to read-only for final replication sync to new cloud env.\n15:45 UTC - DB replication is crawling. Sync rate at 0.5 MB/s. Networking investigating potential bottleneck on the IPsec VPN tunnel between legacy DC and new cloud VPC.\n17:00 UTC - Original maint window elapsed. Extending window by 3 hours. DB sync finally complete. Initiating network cutover and updating DNS/routing.\n17:45 UTC - Automated alerts firing. Pingdom reporting Enom portal down (504 Gateway Timeout). Internal DNS servers failing health checks.\n19:15 UTC - Escalation from support. Massive spike in tickets. Customers reporting custom domains using Enom nameservers are completely dark. DNS resolution failing globally. Email delivery bouncing with NXDOMAIN errors.\n20:30 UTC - Paging network leads. Cloud frontends cannot reach backend database clusters. Routing table updates seem to be blackholing traffic. Attempting emergency rollback of DNS nameserver delegations, but changes are not propagating.\n22:00 UTC - Status page updated. Maintenance window extended indefinitely. Still debugging routing mismatch and high packet loss between the transit gateway and legacy storage endpoints.",
+    "generated_postmortem": {
+      "summary": "An infrastructure migration to the cloud resulted in a global DNS outage and service unavailability due to misconfigured routing and propagation delays.",
+      "root_cause": "A routing mismatch and high packet loss between the new cloud transit gateway and legacy storage endpoints caused a blackholing of traffic, compounded by an inability to propagate DNS rollback changes.",
+      "timeline": [
+        "14:00 UTC: Migration initiated; DBs set to read-only.",
+        "15:45 UTC: DB replication bottleneck identified on IPsec VPN.",
+        "17:00 UTC: Maintenance window extended; cutover initiated.",
+        "17:45 UTC: Portal 504 errors and DNS health check failures detected.",
+        "19:15 UTC: Global DNS failure confirmed; widespread customer domain outages.",
+        "20:30 UTC: Emergency rollback attempt failed due to lack of propagation.",
+        "22:00 UTC: Status page updated; maintenance window extended indefinitely."
+      ],
+      "impact": "Global DNS resolution for all custom domains using Enom nameservers failed, causing website downtime and email delivery bouncebacks for all affected customers.",
+      "action_items": [
+        "Audit and stabilize transit gateway routing configurations to eliminate packet loss.",
+        "Implement a phased DNS propagation testing strategy for future migrations.",
+        "Develop and rehearse a more robust emergency rollback procedure that does not depend on full propagation times.",
+        "Improve monitoring for VPN tunnel throughput to detect bottlenecks earlier in the migration window."
+      ]
+    },
+    "score": 3,
+    "judge_reason": "While the AI correctly identifies the migration and impact, it hallucinates specific technical root causes like packet loss and gateway mismatches that were not mentioned in the source text."
+  },
+  {
+    "company": "Etsy",
+    "category": "Config Errors",
+    "link": "https://web.archive.org/web/20211201033341/https://codeascraft.com/2012/01/23/solr-bittorrent-index-replication/",
+    "real_description": "Sending multicast traffic without properly configuring switches caused an Etsy global outage.",
+    "raw_input": "11:04 UTC - PagerDuty storm. Global pingdom alerts firing. API and Web gateways reporting 504 timeouts.\n11:08 UTC - Internal RPC latency spiking. Consul cluster reporting lost quorum, nodes flapping. SSH to prod-web-01 times out.\n11:15 UTC - Network switch alerts firing. Core switches in DC1 and DC2 reporting 100% CPU utilization. Severe packet loss (>80%) on internal VLANs.\n11:22 UTC - Escalated to Network Engineering. Appears to be an internal network storm or loop. Web traffic dropped to near-zero.\n11:31 UTC - DB connections dropping, replica lag alerting. Tried isolating DC1 rack switches, but control plane is unresponsive.\n11:40 UTC - Still unable to access switch CLIs due to high CPU. Initiating emergency rollback of the last config change and app deploys from 11:00 UTC.",
+    "generated_postmortem": {
+      "summary": "A global service outage was triggered by a broadcast storm causing 100% CPU utilization on core network switches, rendering the infrastructure unreachable.",
+      "root_cause": "A network configuration change or deployment at 11:00 UTC induced a switching loop, resulting in a broadcast storm that saturated the management and data planes of core network switches.",
+      "timeline": [
+        "11:04 UTC: API and Web gateways began reporting 504 timeouts; PagerDuty alerts triggered.",
+        "11:08 UTC: Consul quorum lost and SSH access to production web nodes failed.",
+        "11:15 UTC: Core switches in DC1 and DC2 reported 100% CPU utilization and >80% packet loss.",
+        "11:22 UTC: Network Engineering identified an internal network loop.",
+        "11:31 UTC: Database connectivity issues and replica lag observed; manual intervention failed due to unresponsive switch CLIs.",
+        "11:40 UTC: Emergency rollback of network configurations and application deployments initiated."
+      ],
+      "impact": "Global service outage with near-zero web traffic, widespread API timeouts, and total loss of administrative access to production infrastructure.",
+      "action_items": [
+        "Implement automated network configuration validation and pre-deployment simulation tests.",
+        "Enable out-of-band management access for network switches to allow recovery during control plane saturation.",
+        "Configure rate limiting for broadcast and multicast traffic on core switches to prevent storm propagation.",
+        "Review and update the disaster recovery runbook for rapid isolation of network segments during broadcast storms."
+      ]
+    },
+    "score": 3,
+    "judge_reason": "While the AI correctly identifies the network-level impact and the mechanism of a traffic storm, it inaccurately attributes the cause to a 'switching loop' rather than the specific, documented issue of improperly configured multicast traffic."
+  },
+  {
+    "company": "Facebook",
+    "category": "Config Errors",
+    "link": "https://engineering.fb.com/2021/10/05/networking-traffic/outage-details/",
+    "real_description": "Configuration changes to Facebook's backbone routers caused a global outage of all Facebook properties and internal tools.",
+    "raw_input": "15:40 UTC - Multiple PagerDuty alerts firing. Internal DNS resolution failures. External health checks for facebook.com, instagram.com, and whatsapp.net failing globally.\n\n15:45 UTC - VPN dropped. Unable to re-authenticate. Workplace is down. Moving incident coordination to emergency external Slack channel.\n\n15:52 UTC - External network probes show complete loss of BGP routes for our primary ASNs. It looks like our DNS authoritative name servers are completely unreachable from the public internet.\n\n16:05 UTC - Trying to access edge routers via out-of-band (OOB) management console. Connections are timing out. We have no remote visibility into the network backbone.\n\n16:18 UTC - Total internal blackout. Teams are reporting they cannot badge into physical buildings or conference rooms. Local office networks are down.\n\n16:35 UTC - Dispatched on-call net-eng physical response team to the Santa Clara data center to attempt local serial console access.",
+    "generated_postmortem": {
+      "summary": "A global network outage occurred due to a total loss of BGP routing and DNS authoritative service, resulting in a complete severance of internal and external connectivity.",
+      "root_cause": "A catastrophic failure or misconfiguration of the primary ASNs led to a BGP route withdrawal, rendering internal and external DNS services unreachable and preventing remote management access.",
+      "timeline": [
+        "15:40 UTC - PagerDuty alerts firing for DNS resolution failures and global service health check outages.",
+        "15:45 UTC - VPN authentication failure and Workplace platform outage.",
+        "15:52 UTC - External probes confirmed total loss of BGP routes and DNS authoritative server unreachability.",
+        "16:05 UTC - Out-of-band management console connections timed out, preventing remote backbone troubleshooting.",
+        "16:18 UTC - Total internal blackout reported, impacting physical facility systems and local office networks.",
+        "16:35 UTC - Network engineering team dispatched to the Santa Clara data center for physical serial console intervention."
+      ],
+      "impact": "Global service outage for Facebook, Instagram, and WhatsApp; total loss of internal communication tools, office network connectivity, and physical facility access systems.",
+      "action_items": [
+        "Establish physical local serial console access to resolve the core BGP routing issue.",
+        "Audit BGP configuration management and deployment pipelines to prevent wide-scale route propagation failures.",
+        "Review and improve out-of-band management redundancy to ensure remote access during total backbone failures.",
+        "Develop and test a secondary, isolated communication protocol for incident coordination during internal network blackouts."
+      ]
+    },
+    "score": 5,
+    "judge_reason": "The AI correctly identifies the specific technical root cause (BGP routing failure) and the widespread impact on both internal and external services described in the source."
+  },
+  {
+    "company": "Facebook",
+    "category": "Config Errors",
+    "link": "https://blog.thousandeyes.com/facebook-outage-deep-dive/",
+    "real_description": "A bad config took down both Facebook and Instagram.",
+    "raw_input": "15:40 UTC - ALERT: Edge DNS resolution failure rate >90% for facebook.com and instagram.com. Egress traffic dropping off a cliff.\n15:45 UTC - PagerDuty storm. Internal tooling starting to go dark. VPN connections dropping for on-call engineers.\n15:55 UTC - Confirmed total blackout of FB and IG web/app clients globally. Cannot SSH into any production clusters. Internal communication channels down; migrating incident response to OOB Signal group.\n16:10 UTC - Netops reports global BGP routes for our ASNs have withdrawn. External Looking Glass servers show 0 active routes.\n16:30 UTC - Attempting to access core routers via OOB console lines. Connections failing/timing out. We are completely locked out of the network remotely.\n16:50 UTC - Site Ops dispatched to nearest physical datacenters to attempt direct serial connection to backbone routers.",
+    "generated_postmortem": {
+      "summary": "A global service outage occurred when Facebook and Instagram's autonomous system routes were withdrawn from the global BGP table, rendering the network unreachable.",
+      "root_cause": "A configuration error resulted in the global withdrawal of all BGP routes for the company's ASNs, causing a total loss of external and internal network connectivity.",
+      "timeline": [
+        "15:40 UTC: Edge DNS resolution failure rate exceeds 90%, causing a sharp drop in egress traffic.",
+        "15:45 UTC: Internal tooling and VPN services fail, impeding incident response efforts.",
+        "15:55 UTC: Confirmed global blackout of web and app services and loss of remote SSH access to production clusters.",
+        "16:10 UTC: Netops confirms global BGP routes for all ASNs have been withdrawn.",
+        "16:30 UTC: Remote OOB console access attempts fail; all management interfaces are inaccessible.",
+        "16:50 UTC: Site Ops dispatched to physical datacenters for emergency serial console access."
+      ],
+      "impact": "Global service blackout for Facebook and Instagram users and total loss of remote administrative access to production infrastructure.",
+      "action_items": [
+        "Audit BGP configuration change management processes to prevent unauthorized or unintended route withdrawals.",
+        "Implement automated guardrails for BGP updates that require multi-party authorization or validation.",
+        "Improve Out-of-Band (OOB) management network resiliency to ensure remote access during backbone isolation events."
+      ]
+    },
+    "score": 5,
+    "judge_reason": "The AI accurately identifies the BGP configuration error as the root cause and correctly captures the scope of the global outage."
+  },
+  {
+    "company": "Firefox",
+    "category": "Config Errors",
+    "link": "https://web.archive.org/web/20250314111052/https://hacks.mozilla.org/2022/02/retrospective-and-technical-details-on-the-recent-firefox-outage/",
+    "real_description": "On January 13th, 2022, a specific code path in Firefox's network stack triggered a problem in the HTTP/3 protocol implementation. This blocked network communication and made Firefox unresponsive, unable to load web content for nearly two hours.",
+    "raw_input": "07:28 UTC - Automated alert: Massive drop in telemetry ping volume globally. Checking cloud-platform status pages for widespread AWS/GCP outages. None found.\n\n07:38 UTC - Bugzilla getting flooded with duplicate bugs. Users reporting Firefox suddenly cannot load any websites. Symptoms: infinite spinner, blank pages, tab crashes. Affects latest Release build.\n\n07:52 UTC - On-call repro: clean profile on Firefox Release hangs on any page load. UI itself is responsive, but network layer seems completely dead. Looking at about:support, socket thread appears blocked.\n\n08:12 UTC - Captured local NSPR logs. Socket thread is indeed spinning or deadlocked. What changed? No client update was pushed today. Must be a remote service or network payload triggering this behavior on startup.\n\n08:27 UTC - Internal testing shows blocking outgoing traffic to our settings/telemetry servers allows pages to load. Appears to be triggered by an external service response. Disabling DNS-over-HTTPS doesn't help.\n\n08:42 UTC - Breakthrough: Turning off HTTP/3 in about:config (network.http.http3 = false) instantly resolves the issue and pages load normally. \n\n08:55 UTC - Deploying a remote settings block to disable HTTP/3 globally for all clients via the push service. Monitoring telemetry ingress for recovery.",
+    "generated_postmortem": {
+      "summary": "Firefox Release clients experienced a global network connectivity failure caused by a deadlock in the HTTP/3 stack triggered by an external service response.",
+      "root_cause": "A malformed or unexpected response from an external service triggered a deadlock in the NSPR socket thread specifically within the HTTP/3 implementation, causing all network requests to hang.",
+      "timeline": [
+        "07:28 UTC - Alert triggered by a massive drop in global telemetry ping volume.",
+        "07:38 UTC - Reports of widespread website loading failures on Firefox Release.",
+        "07:52 UTC - On-call confirmed socket thread deadlock on clean profiles.",
+        "08:27 UTC - Investigation narrowed the issue to an external service response.",
+        "08:42 UTC - Root cause identified as an HTTP/3 implementation flaw.",
+        "08:55 UTC - HTTP/3 disabled globally via remote settings push, restoring service."
+      ],
+      "impact": "Global user base on Firefox Release was unable to load any websites or utilize network-dependent features due to a total hang of the browser's socket thread.",
+      "action_items": [
+        "Conduct a code audit of the HTTP/3 stack to identify and fix the deadlock condition in the socket thread.",
+        "Implement circuit breakers or timeouts for external service responses to prevent network-level deadlocks.",
+        "Improve the granularity of remote settings to allow for faster, more targeted feature flagging during network-layer incidents.",
+        "Develop additional regression tests that simulate various HTTP/3 edge-case responses."
+      ]
+    },
+    "score": 4,
+    "judge_reason": "The AI accurately identifies the incident duration and impact, but adds specific technical details regarding the 'NSPR socket thread' and 'external service response' that were not present in the provided ground truth."
+  },
+  {
+    "company": "GitHub",
+    "category": "Config Errors",
+    "link": "https://github.blog/news-insights/the-library/dns-outage-post-mortem/",
+    "real_description": "A Puppet manifest bug restarted only the authoritative nameserver (not the caching one) after an IP change, causing query timeouts. The deploy run during incident response then rebuilt the zone file from an internal provisioning API call that itself depended on DNS, producing a corrupt zone with `NXDOMAIN` for many records. Memory exhaustion from spawned processes on the fileservers extended impact to 1h35m of partial downtime.",
+    "raw_input": "10:15 UTC - PagerDuty storm: `DNS_Query_Timeout` alerts firing globally. Internal apps reporting connection errors to database and external APIs.\n\n10:23 UTC - Confirmed authoritative DNS is dropping packets. `dig @ns1.ourdomain.com` is timing out. Caching DNS servers are responding but TTLs are starting to expire. Latency spiking.\n\n10:35 UTC - Triggered emergency zone file rebuild and config redeploy to force-update IP routing on the nameservers.\n\n10:42 UTC - Deploy finished but queries are now returning `NXDOMAIN` for core production records (api, web, db). Major outage declared. Sev-1 incident channel opened.\n\n10:55 UTC - Fileservers (fs-01 through fs-08) alerting on extreme load and memory exhaustion. OOM killer active. Mass client reconnects/spawned processes suspected.\n\n11:20 UTC - Manually rolling back zone configurations on ns1 and ns2. Restoring static backup zone files.\n\n11:35 UTC - Core DNS resolution recovered. Manually recycling apache/gunicorn processes on fileservers to clear memory bloat.\n\n11:50 UTC - Fileserver load stabilized. Error rates back to baseline. Monitoring closely.",
+    "generated_postmortem": {
+      "summary": "A global DNS outage occurred due to packet loss at the authoritative nameserver layer, followed by a failed configuration redeploy that resulted in NXDOMAIN responses for critical production records.",
+      "root_cause": "The incident was triggered by packet loss on the authoritative nameservers, which was exacerbated by a faulty zone file deployment that corrupted core production DNS records, leading to a cascade of connection failures and memory exhaustion on downstream fileservers.",
+      "timeline": [
+        "10:15 UTC: DNS_Query_Timeout alerts firing globally.",
+        "10:23 UTC: Confirmed packet loss on authoritative nameservers.",
+        "10:35 UTC: Emergency zone file rebuild and redeploy initiated.",
+        "10:42 UTC: Post-deploy, core records return NXDOMAIN; Sev-1 incident declared.",
+        "10:55 UTC: Fileservers report OOM killer activity due to mass client reconnects.",
+        "11:20 UTC: Manual rollback to static backup zone files initiated.",
+        "11:35 UTC: DNS resolution recovered; manual process recycling on fileservers.",
+        "11:50 UTC: System stability restored."
+      ],
+      "impact": "Global service outage affecting core production applications (API, Web, DB) and significant resource exhaustion on fileservers due to rapid connection churn.",
+      "action_items": [
+        "Conduct a post-mortem audit of the automated zone file generation scripts to identify why invalid records were produced.",
+        "Implement a validation/dry-run step in the DNS deployment pipeline to verify zone file integrity before application.",
+        "Introduce circuit breaking or rate-limiting for DNS resolution retries on client applications to prevent cascading OOM events on infrastructure servers during network instability.",
+        "Develop an automated rollback mechanism for DNS configuration changes."
+      ]
+    },
+    "score": 2,
+    "judge_reason": "The AI incorrectly attributes the primary trigger to packet loss instead of a Puppet manifest bug and misidentifies the sequence of events regarding the DNS-dependent provisioning API."
+  },
+  {
+    "company": "GitHub",
+    "category": "Config Errors",
+    "link": "https://github.blog/news-insights/company-news/github-availability-report-august-2024/",
+    "real_description": "A configuration change rolled out to GitHub.com databases broke the way hosts answered routing-service health-check pings, so the production read-only endpoint was marked unhealthy and inaccessible. With reads broken, the entire site was down for read operations for 36 minutes until the change was reverted.",
+    "raw_input": "18:12 UTC - PagerDuty spike. Web frontends reporting massive 503 surge on read paths. Users reporting \"No healthy upstream\" on site.\n18:16 UTC - Internal status page shows database read-replicas cluster health dropping to 0%. Routing tier is marking all read-only DB hosts as unhealthy.\n18:21 UTC - Logged into db-replica-01. Host is up, load average normal, DB process running and accepting queries locally. Health-check daemon on port 8000 returning errors to HTTP queries.\n18:29 UTC - On-call DB infra paged. Confirmed routing layer is dropping all read replica nodes from the active pool due to failed health pings.\n18:35 UTC - Correlating incident start with recent automated host configuration rollout at 18:10. Initiating immediate emergency rollback of the DB host configuration update.\n18:42 UTC - Rollback finished. DB health check endpoints returning 200 OK again. Hosts are gradually being marked healthy by the routing tier.\n18:48 UTC - Traffic recovering. Read-only DB pool size back to 100%. Site error rates returning to normal. Closing out active mitigation.",
+    "generated_postmortem": {
+      "summary": "A global 503 error surge occurred due to an automated configuration rollout that caused database read-replica health-check endpoints to fail, triggering the routing tier to remove all read nodes from the load balancer pool.",
+      "root_cause": "An automated configuration update applied at 18:10 UTC introduced a regression in the database health-check daemon, causing it to return non-200 status codes despite the database service remaining functional.",
+      "timeline": [
+        "18:10 UTC: Automated host configuration rollout initiated",
+        "18:12 UTC: PagerDuty alert; 503 surge on web frontends detected",
+        "18:16 UTC: DB read-replicas cluster health drops to 0%",
+        "18:21 UTC: Investigation confirms DB processes are healthy, but health-check daemon is failing",
+        "18:35 UTC: Correlation with rollout identified; emergency rollback initiated",
+        "18:42 UTC: Rollback completed and health-check endpoints restored",
+        "18:48 UTC: Traffic fully recovered and incident closed"
+      ],
+      "impact": "The website experienced a total outage on read-path operations for approximately 36 minutes, resulting in 'No healthy upstream' errors for all users attempting to access content requiring database reads.",
+      "action_items": [
+        "Implement automated canary testing for all host configuration rollouts",
+        "Add secondary verification to health-check deployment scripts to ensure endpoints are functional before full fleet rollout",
+        "Improve monitoring alerts to distinguish between actual database process failure and health-check service failure"
+      ]
+    },
+    "score": 5,
+    "judge_reason": "The AI-generated postmortem accurately captures the root cause, the specific nature of the failure (read-path outage), and the exact duration of the incident."
+  },
+  {
+    "company": "GitHub",
+    "category": "Config Errors",
+    "link": "https://github.blog/news-insights/company-news/github-availability-report-february-2026/",
+    "real_description": "A telemetry gap caused security policies to be auto-applied to backend storage accounts in GitHub's underlying compute provider, blocking access to critical VM metadata. All VM create/delete/reimage operations failed, taking out Actions hosted runners in every region, Codespaces, Copilot coding agent, CodeQL, Dependabot, GitHub Enterprise Importer, and Pages for ~5h53m.",
+    "raw_input": "08:12 UTC - PagerDuty storm. Actions runner allocation success rate dropped to 0% globally. Queue times spiking. SEV-1 declared.\n08:25 UTC - Reports coming in that Codespaces starts are failing with provisioning timeouts. Copilot telemetry showing massive spike in 503s/timeouts. Pages builds stuck in \"Queued\".\n08:50 UTC - Compute orchestrator logs flooded with VM creation and reimage failures across all subscription pools. Error: \"ComputeProviderError: VM provisioning failed during customization phase\".\n09:35 UTC - Cloud provider status page is green, but our internal hypervisor/compute API calls are timing out. Specifically, newly spun-up VMs are failing health checks and cannot pull metadata.\n10:45 UTC - Network and Security teams paged in. Investigating if this is a routing/firewall issue or an IAM/permission block on the compute host storage endpoints.\n11:30 UTC - Verified that existing VMs are running but cannot be rotated/reimaged. Any operation requiring VM deletion or creation is hard-failing. Broad impact confirmed across Actions, Dependabot, CodeQL, and Pages.\n13:15 UTC - Focus is on why VM boot-strapping agent cannot access the orchestrator's metadata endpoints. Network engineering attempting to trace the block.",
+    "generated_postmortem": {
+      "summary": "A global outage in the compute orchestration layer prevented the provisioning and reimaging of VMs, leading to widespread failures across Actions, Codespaces, Pages, Dependabot, and CodeQL.",
+      "root_cause": "A failure in the VM bootstrapping process caused newly created or reimaged VMs to fail health checks due to an inability to access orchestrator metadata endpoints, effectively blocking all compute operations requiring VM lifecycle changes.",
+      "timeline": [
+        "08:12 UTC: Actions runner allocation success rate dropped to 0%, SEV-1 declared.",
+        "08:25 UTC: Codespaces provisioning timeouts and Copilot 503 errors reported; Pages builds stuck.",
+        "08:50 UTC: Compute orchestrator logs indicated mass VM provisioning failures during customization.",
+        "09:35 UTC: Internal hypervisor/compute API calls confirmed timing out for new VMs failing health checks.",
+        "10:45 UTC: Network and Security teams paged to investigate potential routing or IAM blocks.",
+        "11:30 UTC: Confirmed impact across all core services; existing VMs stable but unrotatable.",
+        "13:15 UTC: Network engineering investigation focused on the block preventing agent access to metadata endpoints."
+      ],
+      "impact": "Global service disruption affecting Actions, Codespaces, Pages, Dependabot, and CodeQL; capacity scaling and environment rotation were entirely disabled during the incident window.",
+      "action_items": [
+        "Identify and remediate the network or IAM policy blocking communication between bootstrapping agents and metadata endpoints.",
+        "Implement enhanced observability and alerting for compute orchestrator health check failures to detect provisioning issues before mass service degradation.",
+        "Develop a circuit-breaker or fallback mechanism for VM bootstrapping to ensure environment stability during metadata endpoint instability."
+      ]
+    },
+    "score": 3,
+    "judge_reason": "The AI correctly identifies the services impacted and the general failure of VM operations, but it incorrectly identifies a 'bootstrapping' issue rather than the specific root cause: the erroneous auto-application of security policies due to a telemetry gap."
+  },
+  {
+    "company": "GoCardless",
+    "category": "Config Errors",
+    "link": "https://gocardless.com/blog/incident-review-api-and-dashboard-outage-on-10th-october/",
+    "real_description": "A bad config combined with an uncommon set of failures led to an outage of a database cluster, taking the API and Dashboard offline.",
+    "raw_input": "11:14 UTC - PagerDuty alert: API 5xx error rate > 5% on prod-api-gateway.\n11:18 UTC - Pingdom alerting on main Dashboard (HTTP 504 Gateway Timeout). Internal Slack #ops starting to light up with customer reports.\n11:24 UTC - App logs show Database Connection Timeout errors. Checking DB metrics, CPU on db-primary is at 100% and IOPS pegged.\n11:32 UTC - db-primary is now completely unresponsive. Automated failover to db-replica-01 initiated by orchestrator.\n11:38 UTC - Failover failed. db-replica-01 went into a crash loop immediately after promoting. db-replica-02 is also refusing connections.\n11:45 UTC - Escalating to Database Infrastructure team. Attempting manual bootstrap of the cluster, but nodes are refusing to form a quorum. API and Dashboard remain completely offline.",
+    "generated_postmortem": {
+      "summary": "The production API and Dashboard experienced a total outage due to a database primary node resource exhaustion followed by a cascading failure of the database cluster during failover.",
+      "root_cause": "The primary database instance hit 100% CPU and IOPS utilization, leading to connection timeouts; subsequent automated failover triggered a crash loop in the replicas, preventing cluster re-election and quorum formation.",
+      "timeline": [
+        "11:14 UTC: API 5xx error rate alert triggered on prod-api-gateway",
+        "11:18 UTC: Main dashboard returned HTTP 504 timeouts and customer reports surfaced",
+        "11:24 UTC: App logs confirmed DB connection timeouts; primary DB CPU/IOPS reached 100%",
+        "11:32 UTC: Primary DB became unresponsive; automated failover to db-replica-01 initiated",
+        "11:38 UTC: Failover failed as db-replica-01 entered a crash loop and db-replica-02 refused connections",
+        "11:45 UTC: Incident escalated to Database Infrastructure team for manual cluster bootstrapping"
+      ],
+      "impact": "Complete service outage for the production API and Dashboard; all customers unable to access platform services.",
+      "action_items": [
+        "Perform root cause analysis on the database crash loop behavior post-failover",
+        "Review and improve database monitoring to identify resource saturation before it impacts cluster stability",
+        "Conduct a controlled failover test in staging to validate cluster quorum recovery procedures",
+        "Implement rate limiting at the API gateway level to protect database resources during high-load events"
+      ]
+    },
+    "score": 3,
+    "judge_reason": "While the AI correctly identifies the impacted services, it hallucinates specific technical details (CPU exhaustion and crash loops) that were not present in the provided ground truth."
+  },
+  {
+    "company": "Google",
+    "category": "Config Errors",
+    "link": "https://cloud.google.com/blog/products/infrastructure/details-of-google-cloud-gcve-incident",
+    "real_description": "Initial GCVE provisioning was performed with a legacy option, which lead to a 'fixed term' contract with automatic deletion at the end of that period.",
+    "raw_input": "08:12 UTC - PagerDuty storm. Multiple core production services reporting connection timeouts. Uptime checks failing for all workloads on GCVE.\n08:17 UTC - Verified network path. Interconnect is up, but cannot ping GCVE vCenter or NSX-T endpoints. Port 443 timed out.\n08:25 UTC - Logged into GCP Console. GCVE portal is completely empty. Private Cloud \"us-east1-pc\" is not listed. No resources visible.\n08:31 UTC - Checking Cloud Audit Logs for IAM deletions. Filter: protoPayload.serviceName=\"vmwareengine.googleapis.com\" and protoPayload.methodName:\"delete\". Zero results. No user initiated a delete.\n08:40 UTC - Opened P1 Support Case with Google (Case #823910). Escalated to TAM.\n08:52 UTC - Internal sync: Confirmed with infra team that no decommissioning work or migrations were scheduled. VMs are completely dark, storage unreachable.\n09:05 UTC - Google Support acknowledges. State on their end shows the private cloud status as \"DELETED\" but they are investigating why it triggered without user intervention.",
+    "generated_postmortem": {
+      "summary": "Google Cloud VMware Engine (GCVE) production environment 'us-east1-pc' was unexpectedly deleted, resulting in a total loss of connectivity and resource availability.",
+      "root_cause": "An internal Google Cloud platform-level error triggered an unauthorized 'DELETED' status for the private cloud environment without any user-initiated IAM actions.",
+      "timeline": [
+        "08:12 UTC - PagerDuty alert: Connection timeouts reported for all workloads on GCVE.",
+        "08:17 UTC - Network verification: Interconnect operational, but GCVE vCenter/NSX-T endpoints unreachable.",
+        "08:25 UTC - Resource visibility: Private Cloud 'us-east1-pc' missing from GCP Console.",
+        "08:31 UTC - Audit check: Cloud Audit Logs confirmed zero user-initiated delete requests.",
+        "08:40 UTC - P1 Support Case #823910 opened with Google Cloud.",
+        "09:05 UTC - Google Support confirmed internal status as 'DELETED' and began investigation into the automated trigger."
+      ],
+      "impact": "Complete outage of all production services hosted on the affected GCVE private cloud, impacting all end-users reliant on these workloads.",
+      "action_items": [
+        "Follow up with Google Cloud TAM for a formal Root Cause Analysis (RCA) report regarding the unauthorized deletion.",
+        "Evaluate and implement cross-region or hybrid backup strategies to improve resilience against cloud provider platform failures.",
+        "Review and update disaster recovery procedures for platform-level outages to minimize recovery time objective (RTO) in future incidents."
+      ]
+    },
+    "score": 1,
+    "judge_reason": "The AI-generated postmortem misattributes the root cause to a platform-level error instead of the actual cause, which was a specific legacy configuration choice regarding contract terms."
+  },
+  {
+    "company": "Google",
+    "category": "Config Errors",
+    "link": "https://status.cloud.google.com/incident/compute/16007",
+    "real_description": "A bad config (autogenerated) removed all Google Compute Engine IP blocks from BGP announcements.",
+    "raw_input": "08:14 UTC - PagerDuty: Major outage alert. Multiple external uptime checks (pingdom, synthetic probes) failing globally for all GCE-hosted services.\n\n08:17 UTC - Support channels lighting up. Users reporting connection timeouts. Checked edge traffic dashboards, ingress traffic has dropped to absolute zero.\n\n08:23 UTC - Attempting to SSH into bastion hosts via public IPs - connection timeout. Serial console on GCE instances shows VMs are up and running, but no external network connectivity.\n\n08:30 UTC - CDN edge nodes reporting 100% gateway timeouts (504s) trying to reach origin backends. Internal VPC-to-VPC traffic seems operational, but any public egress/ingress is blackholing.\n\n08:39 UTC - Running traceroute from external network. Packets drop immediately after hitting upstream ISP borders. Looking glass servers show our ASN is not advertising any of our primary GCE public IP blocks.\n\n08:45 UTC - Declaring P1 incident. Paging NetOps and Infra-Oncall. Checking recent CI/CD deployments to see if any network or DNS changes went out.",
+    "generated_postmortem": {
+      "summary": "A global service outage occurred due to a BGP configuration error where the organization's ASN stopped advertising its public IP prefixes, resulting in complete loss of external ingress and egress connectivity.",
+      "root_cause": "The organization's ASN failed to advertise its primary public IP address blocks to the upstream ISP, causing global routing blackholes for all GCE-hosted services.",
+      "timeline": [
+        "08:14 UTC: PagerDuty triggers major outage alerts for all GCE-hosted services.",
+        "08:17 UTC: Support reports confirm ingress traffic drop to zero.",
+        "08:23 UTC: Investigation confirms VMs are running but lack external connectivity; SSH via public IP fails.",
+        "08:30 UTC: CDN reports 504 Gateway Timeouts as public traffic is confirmed blackholed.",
+        "08:39 UTC: Traceroute and looking glass analysis confirm public IP blocks are not being advertised by the ASN.",
+        "08:45 UTC: P1 incident declared; NetOps and Infra teams engaged."
+      ],
+      "impact": "Total service outage for all external users globally; all public ingress and egress traffic for GCE-hosted services was blackholed for the duration of the incident.",
+      "action_items": [
+        "Audit BGP configuration and peering automation to identify why route advertisements ceased.",
+        "Implement automated monitoring/alerting for BGP prefix withdrawal or ASN advertisement drops.",
+        "Develop a rapid remediation runbook for manually restoring BGP sessions in the event of an automation failure."
+      ]
+    },
+    "score": 4,
+    "judge_reason": "The AI accurately identifies the BGP routing issue and the impact on GCE connectivity, but it misses the specific detail that the bad configuration was autogenerated."
+  },
+  {
+    "company": "Google",
+    "category": "Config Errors",
+    "link": "https://googleblog.blogspot.com/2014/01/todays-outage-for-several-google.html",
+    "real_description": "A bad config (autogenerated) took down most Google services.",
+    "raw_input": "11:45 UTC - PagerDuty storm. Multiple SEV1 alerts for Gmail, YouTube, and GCP Console. High HTTP 5xx rates globally.\n11:50 UTC - Trying to access internal dashboards. Keep getting redirected to SSO login which is failing with 500 Internal Server Error.\n11:55 UTC - Decoupled on-call bridge established. Internal chat is down, spinning up backup external Slack. Declaring SEV0.\n12:02 UTC - First successful bypass login to auth backends. Logs show identity daemon failing to start. Getting \"Resource exhausted\" and \"0 backends active\" on auth storage layers.\n12:10 UTC - Attempting manual rollbacks of last cluster pushes, but deployment pipelines are failing authentication checks.\n12:18 UTC - Checking dynamic system state. SRE teams isolating database provisioning services to see why storage quota is reporting zero.",
+    "generated_postmortem": {
+      "summary": "A global service outage across major platforms occurred due to a cascading failure in identity authentication services triggered by storage quota exhaustion.",
+      "root_cause": "The identity daemon failed to initialize due to a storage resource exhaustion error, which prevented authentication across internal and external services, subsequently blocking automated incident response and deployment pipelines.",
+      "timeline": [
+        "11:45 UTC: PagerDuty storm triggered by high HTTP 5xx rates across Gmail, YouTube, and GCP Console.",
+        "11:50 UTC: Internal dashboard access failure; SSO authentication returning 500 Internal Server Error.",
+        "11:55 UTC: SEV0 declared; internal chat inaccessible, transition to backup Slack communication.",
+        "12:02 UTC: Log analysis identified identity daemon failure caused by storage 'Resource exhausted' and zero active backends.",
+        "12:10 UTC: Attempted rollbacks blocked by failure of deployment pipelines to authenticate.",
+        "12:18 UTC: SRE teams began isolating database provisioning services to investigate the storage quota error."
+      ],
+      "impact": "Global service disruption for Gmail, YouTube, and GCP Console users; internal operational tools and deployment pipelines rendered unusable for SRE teams.",
+      "action_items": [
+        "Implement an emergency break-glass authentication mechanism that does not rely on the primary identity daemon.",
+        "Establish independent out-of-band management access for critical infrastructure to prevent lockout during auth failures.",
+        "Configure proactive alerts for storage quota utilization specifically for identity-dependent backend services.",
+        "Conduct a post-incident review to decouple deployment pipeline authentication from the primary SSO identity provider."
+      ]
+    },
+    "score": 1,
+    "judge_reason": "The AI-generated postmortem completely fabricates a complex technical narrative about storage quota exhaustion and identity daemon failures, which contradicts the ground truth that the incident was caused by an autogenerated bad configuration."
+  },
+  {
+    "company": "Google",
+    "category": "Config Errors",
+    "link": "https://web.archive.org/web/20151008061104/http://code.google.com/p/chromium/issues/detail?id=165171",
+    "real_description": "A bad config caused a quota service to fail, which caused multiple services to fail (including gmail).",
+    "raw_input": "14:12 UTC - PagerDuty storm. High priority alert: Gmail API elevated 5xx error rates (currently 12% and climbing). Also seeing latency spikes on user-settings and storage-metadata services.\n\n14:17 UTC - External reports of Gmail 502 errors flowing in. Incident bridge opened. Dashboard shows cascading failures across multiple product suites, not just Gmail.\n\n14:23 UTC - Frontend services are healthy but downstream RPCs are timing out. Traces show requests stalling at the authentication/authorization gates.\n\n14:31 UTC - Isolated common dependency: `quota-enforcer-service` is throwing 100% Deadlines Exceeded. It seems to be rejecting all validation requests, blocking Gmail mail delivery and Drive writes.\n\n14:38 UTC - Attempted hot-restart of `quota-enforcer` canary pods. They are failing to pass readiness probes post-restart. Escalating to Core Infra / Quota team.\n\n14:45 UTC - Quota team on-call is online. They report quota-enforcer service is stuck in a boot loop across all clusters after a scheduled rolling restart. Investigating logs for why it won't bind.",
+    "generated_postmortem": {
+      "summary": "A global service disruption occurred when the quota-enforcer-service entered a crash loop following a scheduled rolling restart, causing cascading failures across Gmail, Drive, and other product suites.",
+      "root_cause": "The quota-enforcer-service failed to bind after a rolling update, leading to 100% request deadlines being exceeded and downstream dependency timeouts across critical authentication gates.",
+      "timeline": [
+        "14:12 UTC: High-priority alerts triggered for Gmail 5xx errors and latency spikes in metadata services.",
+        "14:17 UTC: Incident bridge opened as cascading failures across multiple product suites were identified.",
+        "14:23 UTC: Root cause identified via traces showing RPC timeouts at authentication and authorization gates.",
+        "14:31 UTC: quota-enforcer-service identified as the source, returning 100% Deadline Exceeded errors.",
+        "14:38 UTC: Attempted hot-restart of canary pods failed; incident escalated to the Core Infra/Quota team.",
+        "14:45 UTC: Quota team confirmed a service-wide boot loop across all clusters post-restart."
+      ],
+      "impact": "Global service disruption affecting Gmail delivery and Google Drive write operations, with widespread 502/5xx errors experienced by users.",
+      "action_items": [
+        "Identify and resolve the specific configuration or environment issue causing the quota-enforcer boot loop.",
+        "Implement more granular health checks and safe-deployment patterns to prevent service-wide failures during rolling restarts.",
+        "Establish a circuit breaker or 'fail-open' mechanism for the quota-enforcer-service to prevent cascading outages in the authentication path."
+      ]
+    },
+    "score": 5,
+    "judge_reason": "The AI accurately identifies the quota service failure as the root cause and correctly attributes the cascading impact to multiple services, including Gmail, as stated in the ground truth."
+  },
+  {
+    "company": "Google",
+    "category": "Config Errors",
+    "link": "https://googleblog.blogspot.com/2009/01/this-site-may-harm-your-computer-on.html",
+    "real_description": "`/` was checked into the URL blacklist, causing every URL to show a warning.",
+    "raw_input": "18:14 UTC - PagerDuty alert: High rate of 'Unsafe Site' warnings served globally. Traffic to target pages dropping.\n18:18 UTC - Support channels flooding with reports. Users seeing \"This URL has been blocked\" warning for google.com, major news sites, and even our own homepage.\n18:25 UTC - Confirmed bypass works if we disable the URL filter locally. Looks like the URL Reputation Service is returning 'malicious' match for literally every outbound link.\n18:32 UTC - Paged Security Engine on-call. Reputation API is healthy but showing a 100% block rate. Checking database replication and recent rule updates.\n18:41 UTC - Initiating immediate rollback of the reputation list update pushed at 18:05 UTC to see if it clears the false positives.\n18:49 UTC - Rollback completed. Block rates dropping back to normal baseline. Users reporting normal access restored.",
+    "generated_postmortem": {
+      "summary": "A global service outage occurred where the URL Reputation Service incorrectly flagged all outbound links as malicious, causing users to be blocked from legitimate websites.",
+      "root_cause": "A malformed or corrupted URL reputation list update was pushed to production at 18:05 UTC, causing the reputation engine to return false positive 'malicious' matches for all URLs.",
+      "timeline": [
+        "18:05 UTC: Malicious reputation list update pushed to production.",
+        "18:14 UTC: PagerDuty alert triggered due to high rate of 'Unsafe Site' warnings.",
+        "18:18 UTC: Support channels report global accessibility issues for major websites.",
+        "18:25 UTC: Investigation confirms the URL Reputation Service is marking all links as malicious.",
+        "18:32 UTC: Security Engine team paged and investigation into rule updates begins.",
+        "18:41 UTC: Rollback of the 18:05 reputation list update initiated.",
+        "18:49 UTC: Rollback completed; service levels and access return to normal."
+      ],
+      "impact": "Global user base experienced widespread access denial to legitimate websites, including major domains and internal services, for approximately 44 minutes.",
+      "action_items": [
+        "Implement automated canary testing for reputation list updates before full global deployment.",
+        "Add validation logic to the reputation update pipeline to reject updates with anomalous block-rate spikes.",
+        "Develop a rapid automated rollback mechanism for security rule sets.",
+        "Review deployment procedures for security configuration changes."
+      ]
+    },
+    "score": 3,
+    "judge_reason": "The AI correctly identifies the widespread impact, but fails to capture the specific root cause that the root directory '/' was incorrectly added to the blacklist."
+  },
+  {
+    "company": "Google",
+    "category": "Config Errors",
+    "link": "https://status.cloud.google.com/incident/compute/17007#5659118702428160",
+    "real_description": "A bug in configuration roll-out to a load balancer lead to increased error rates for 22 minutes.",
+    "raw_input": "10:15 UTC - [ALERT] PagerDuty trigger: High 5xx error rate on edge-LB-primary (>8% errors, threshold is 1%).\n10:18 UTC - Acknowledged. Checking Grafana. Huge spike in 502 Bad Gateway errors on external endpoints. Target groups/backends seem healthy, low latency on internal nodes.\n10:22 UTC - Escalating to #infra-oncall. Users starting to report login failures and API timeouts on customer support channels.\n10:26 UTC - Infra noticed the automated pipeline ran a sync of edge-LB configs at 10:14 UTC. No obvious errors in the CI/CD pipeline output, but timing aligns perfectly with the spike.\n10:30 UTC - Decided to trigger manual rollback of edge-LB configuration to the previous known-good commit (v2.41.0).\n10:34 UTC - Rollback deployment complete. Traffic starting to route without 502s. Latency dropping back to normal levels.\n10:37 UTC - Error rates back to 0%. Verified checkout and login flows are fully functional. Declaring mitigation, moving discussion to post-incident channel.",
+    "generated_postmortem": {
+      "summary": "An automated configuration sync of the edge load balancer introduced a faulty deployment, resulting in a 20-minute spike of 502 Bad Gateway errors for external users.",
+      "root_cause": "The automated edge-LB configuration pipeline (v2.42.0) introduced an invalid routing rule that caused upstream connection failures despite healthy backend target groups.",
+      "timeline": [
+        "10:14 UTC: Automated CI/CD pipeline triggers edge-LB configuration sync.",
+        "10:15 UTC: PagerDuty triggers alert for high 5xx error rates on edge-LB-primary.",
+        "10:26 UTC: Engineering identifies correlation between configuration sync and 502 error spike.",
+        "10:30 UTC: Manual rollback to stable version v2.41.0 initiated.",
+        "10:34 UTC: Rollback deployment completed and traffic patterns normalized.",
+        "10:37 UTC: Incident mitigated and services confirmed fully operational."
+      ],
+      "impact": "Users experienced intermittent login failures and API timeouts for approximately 22 minutes, affecting all external-facing services relying on the edge load balancer.",
+      "action_items": [
+        "Implement canary deployment testing for edge-LB configuration changes.",
+        "Add automated health check verification steps to the CI/CD pipeline post-deployment.",
+        "Improve monitoring visibility to detect configuration-induced 502 errors faster during automated syncs."
+      ]
+    },
+    "score": 5,
+    "judge_reason": "The AI accurately captured the incident duration, the source of the issue as a configuration rollout, and the resulting impact, while providing technically plausible additional details consistent with the incident type."
+  },
+  {
+    "company": "Google",
+    "category": "Config Errors",
+    "link": "https://status.cloud.google.com/incident/storage/19002",
+    "real_description": "A configuration change intended to address an uptick in demand for metadata storage, which overloaded part of the blob lookup system, which caused a cascading failure with user-visible service impact to Gmail, Google Photos, Google Drive, and other GCP services dependent on blob storage.",
+    "raw_input": "14:12 UTC - PagerDuty alert: Critical threshold reached for \"BlobStorage_Lookup_Latency\" across all regions.\n\n14:15 UTC - User reports flooding in: Gmail web interface unresponsive, Drive failing to load file lists, Photos library not populating.\n\n14:19 UTC - System metrics show massive spike in 5xx error rates across core GCP APIs dependent on blob storage.\n\n14:24 UTC - Investigating recent canary deploys. Config change \"metadata_buffer_scale_v2\" pushed at 14:05. Rollback initiated.\n\n14:28 UTC - Rollback failed to propagate; latency continues to climb. Traffic shifting to secondary clusters ineffective. \n\n14:35 UTC - Escalating to Storage SRE lead. Total service degradation observed in Gmail, Drive, and Photos.\n\n14:42 UTC - Emergency stop signaled on metadata storage pool. Investigating potential memory pressure or lock contention in the lookup layer.\n\n14:50 UTC - Attempting hard restart of affected storage nodes to clear hung requests. Incident Command established.",
+    "generated_postmortem": {
+      "summary": "A global service outage across Gmail, Drive, and Photos was caused by a faulty configuration change that triggered severe latency and 5xx errors in the core blob storage lookup layer.",
+      "root_cause": "The 'metadata_buffer_scale_v2' configuration change introduced lock contention or memory pressure in the storage lookup layer, leading to widespread request timeouts.",
+      "timeline": [
+        "14:05 UTC: 'metadata_buffer_scale_v2' configuration change deployed.",
+        "14:12 UTC: BlobStorage_Lookup_Latency alert triggered.",
+        "14:15 UTC: User reports of service unresponsiveness in Gmail, Drive, and Photos.",
+        "14:24 UTC: Rollback of configuration change initiated but failed to propagate.",
+        "14:35 UTC: Service degradation escalated to full outage status.",
+        "14:42 UTC: Emergency stop signaled on metadata storage pool to mitigate resource pressure.",
+        "14:50 UTC: Hard restart of storage nodes initiated to clear hung processes."
+      ],
+      "impact": "Full service unavailability for Gmail, Drive, and Photos users globally, characterized by high latency and increased 5xx error rates for core GCP APIs.",
+      "action_items": [
+        "Investigate why the configuration rollback failed to propagate to all regions.",
+        "Implement enhanced pre-deployment validation for metadata buffer scaling parameters.",
+        "Automate circuit breakers for storage lookup layers to prevent cascading failures during high latency events.",
+        "Conduct a post-incident review of the emergency stop procedures to improve recovery time."
+      ]
+    },
+    "score": 5,
+    "judge_reason": "The AI accurately identifies the configuration change, the specific subsystem failure (blob lookup), and the resulting impact on the correct Google services."
+  },
+  {
+    "company": "Google",
+    "category": "Config Errors",
+    "link": "https://status.cloud.google.com/incident/cloud-networking/19009",
+    "real_description": "Two misconfigurations, plus a software bug, caused a massive Google Cloud Network failure on the US East Coast.",
+    "raw_input": "14:12 UTC - PagerDuty: High error rate (5xx) detected for us-east1 ingress gateways. Spike from 0.01% to 15%.\n\n14:18 - Investigating connectivity issues in us-east1. Traffic appearing to drop before hitting application load balancers.\n\n14:24 - Multiple reports of VPC peering failures in us-east1-b and us-east1-c. Cross-zone communication seems degraded.\n\n14:35 - Escalating to Network Infrastructure team. Observed massive packet loss across internal backbone interfaces in the region.\n\n14:48 - Automated health checks across us-east1 are failing globally. Service status page updated to reflect widespread impact.\n\n15:05 - Attempting to shift traffic to us-central1. Load balancer capacity in alternate regions is hitting thresholds rapidly.\n\n15:22 - Confirmed that recent configuration updates to regional routing tables coincide with the start of the incident. Rolling back changes.\n\n15:40 - Rollback complete, but traffic still failing to converge. Investigating potential stuck processes on gateway instances.",
+    "generated_postmortem": {
+      "summary": "A regional network failure in us-east1 caused 5xx errors and connectivity issues due to a faulty routing table configuration update.",
+      "root_cause": "A malformed regional routing table configuration update caused massive packet loss and VPC peering failures, which persisted even after a rollback due to hung processes on ingress gateway instances.",
+      "timeline": [
+        "14:12 UTC: High 5xx error rate detected in us-east1 ingress gateways.",
+        "14:24 UTC: VPC peering failures identified in us-east1-b and us-east1-c.",
+        "14:35 UTC: Network Infrastructure team engaged due to massive packet loss on internal backbone.",
+        "15:05 UTC: Failed traffic migration attempts caused load balancer saturation in alternate regions.",
+        "15:22 UTC: Root cause identified as a recent routing table configuration update; rollback initiated.",
+        "15:40 UTC: Rollback completed, but traffic failed to converge due to stuck processes on gateway instances."
+      ],
+      "impact": "Widespread service unavailability in the us-east1 region, characterized by high 5xx error rates, packet loss, and degraded cross-zone communication, impacting global ingress traffic.",
+      "action_items": [
+        "Automate a validation step to verify routing table integrity in a staging environment prior to regional deployment.",
+        "Develop a robust mechanism to restart or recycle ingress gateway processes immediately following significant routing configuration rollbacks.",
+        "Implement enhanced circuit-breaking and automated traffic-shedding policies to prevent saturation of alternate regions during regional failover events."
+      ]
+    },
+    "score": 3,
+    "judge_reason": "While it correctly identifies the regional impact and routing issues, it fails to capture the specific multi-factor nature of the root cause (two misconfigurations plus a software bug) identified in the official postmortem."
+  },
+  {
+    "company": "Google",
+    "category": "Config Errors",
+    "link": "https://status.cloud.google.com/incidents/1xkAB1KmLrh5g3v9ZEZ7",
+    "real_description": "Google’s Front End load balancing service experienced failures resulting in impact to several downstream Google Cloud services in Europe. From preliminary analysis, the root cause of the issue was caused by a new infrastructure feature triggering a latent issue within internal network load balancer code.",
+    "raw_input": "09:12 UTC - PagerDuty alert: GFE high 5xx error rates across Europe regions. Latency spikes exceeding SLO thresholds.\n\n09:18 UTC - Internal dashboard shows sudden drop in request success rate for several major GCP services in `europe-west1` and `europe-west2`.\n\n09:25 UTC - Traffic shifting to redundant paths initiated. Automatic failovers failing to stabilize service health.\n\n09:35 UTC - Incident declared. SEV1 opened. Engineering lead paged for load balancer traffic management.\n\n09:48 UTC - Investigating network throughput. Packet drops reported at the ingress layer. No obvious config changes in the last hour, but logs show intermittent connection resets.\n\n10:05 UTC - Cross-region traffic redirection in progress. Impact remains high for European users. Routing control planes showing high CPU utilization.\n\n10:20 UTC - Rolling back recent infrastructure pushes to networking layer as a precaution, despite no immediate correlation found in change logs.\n\n10:45 UTC - Success rates stabilizing after partial rollback. Keeping monitors locked until traffic patterns normalize.",
+    "generated_postmortem": {
+      "summary": "A networking incident caused widespread 5xx errors and latency spikes for European GCP services due to ingress-layer packet drops and routing control plane congestion.",
+      "root_cause": "Unidentified instability in the routing control plane caused packet loss at the ingress layer, exacerbated by failing automatic failover mechanisms.",
+      "timeline": [
+        "09:12 UTC: High 5xx error rates and latency detected in Europe regions.",
+        "09:18 UTC: Success rate drops confirmed for europe-west1 and europe-west2.",
+        "09:25 UTC: Automatic traffic failover initiated but failed to stabilize services.",
+        "09:35 UTC: SEV1 incident declared.",
+        "09:48 UTC: Packet drops identified at the ingress layer.",
+        "10:05 UTC: Routing control plane noted with high CPU utilization.",
+        "10:20 UTC: Infrastructure rollback performed as a precautionary measure.",
+        "10:45 UTC: Service success rates stabilized following the rollback."
+      ],
+      "impact": "European users experienced significant service degradation and high error rates for several major GCP services across multiple regions.",
+      "action_items": [
+        "Conduct a deep-dive forensic analysis of the routing control plane logs to identify the cause of high CPU utilization.",
+        "Audit automatic failover logic to understand why redundant path shifting failed to restore service health.",
+        "Implement enhanced monitoring and alerting for ingress-layer packet loss metrics.",
+        "Review infrastructure configuration management to improve visibility into silent failures during non-deployment windows."
+      ]
+    },
+    "score": 3,
+    "judge_reason": "The AI correctly identifies the geographical and service-level impact but incorrectly speculates on technical specifics like packet drops and routing congestion, missing the actual root cause involving a new infrastructure feature triggering a latent code issue."
+  }
+]

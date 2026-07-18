@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Postmortem Generator</title>
+<style>
+  body {
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: #ffffff;
+    margin: 0;
+    padding: 2rem;
+    color: #1a1a1a;
+  }
+  .container {
+    max-width: 1100px;
+    margin: 0 auto;
+  }
+  h1 {
+    text-align: center;
+    font-weight: 500;
+    font-size: 28px;
+    margin-bottom: 1.5rem;
+  }
+  .screen { display: none; }
+  .screen.active { display: block; }
+
+  label {
+    display: block;
+    text-align: center;
+    font-size: 15px;
+    color: #444;
+    margin-bottom: 0.5rem;
+  }
+  select, textarea {
+    display: block;
+    width: 100%;
+    max-width: 640px;
+    margin: 0 auto 1.5rem;
+    padding: 12px;
+    border: none;
+    border-radius: 8px;
+    background: #efefef;
+    font-size: 14px;
+    box-sizing: border-box;
+  }
+  textarea {
+    min-height: 220px;
+    resize: vertical;
+    font-family: inherit;
+  }
+  button {
+    display: block;
+    margin: 0 auto;
+    background: #4a86d1;
+    color: white;
+    border: none;
+    padding: 12px 32px;
+    border-radius: 8px;
+    font-size: 16px;
+    cursor: pointer;
+  }
+  button:hover { background: #3b6fb0; }
+  button:disabled { background: #aaa; cursor: not-allowed; }
+
+  .back-btn {
+    background: #4a86d1;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0 0 1.5rem 0;
+    padding: 10px 20px;
+  }
+
+  .top-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1.5rem;
+  }
+  .score-badge {
+    background: #d9f2df;
+    color: #1e6b34;
+    padding: 10px 20px;
+    border-radius: 8px;
+    font-weight: 500;
+  }
+  .score-reason {
+    font-size: 13px;
+    color: #555;
+    margin-top: 4px;
+    text-align: right;
+  }
+
+  .compare {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+  }
+  .compare.single { grid-template-columns: 1fr; max-width: 640px; margin: 0 auto; }
+  .card {
+    background: #f0f0f0;
+    border-radius: 8px;
+    padding: 20px;
+  }
+  .card h3 { margin-top: 0; font-size: 16px; font-weight: 500; }
+  .field { margin-bottom: 14px; }
+  .field-label { font-size: 12px; text-transform: uppercase; color: #777; margin-bottom: 2px; }
+  .field-value { font-size: 14px; line-height: 1.5; }
+  ul { margin: 4px 0; padding-left: 20px; }
+
+  .loading { text-align: center; color: #777; padding: 2rem; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Postmortem Generator</h1>
+
+  <div id="screen-input" class="screen active">
+    <label for="incident-select">Choose a real incident (optional)</label>
+    <select id="incident-select">
+      <option value="">-- Or write your own notes below --</option>
+    </select>
+
+    <label for="notes">Paste incident notes here</label>
+    <textarea id="notes" placeholder="e.g. 14:02 UTC - error rate spikes to 40%..."></textarea>
+
+    <button id="generate-btn">Generate Postmortem</button>
+  </div>
+
+  <div id="screen-output" class="screen">
+    <button class="back-btn" id="back-btn">&larr; Edit Notes</button>
+
+    <div class="top-row">
+      <h2 style="margin:0; font-weight:500;">Generated Postmortem</h2>
+      <div id="score-container" style="display:none;">
+        <div class="score-badge" id="score-badge"></div>
+        <div class="score-reason" id="score-reason"></div>
+      </div>
+    </div>
+
+    <div id="loading" class="loading">Generating...</div>
+
+    <div class="compare" id="compare-container" style="display:none;"></div>
+  </div>
+</div>
+
+<script>
+const API_BASE = "http://127.0.0.1:5000";
+let incidents = [];
+let selectedIncident = null;
+
+async function loadIncidents() {
+  try {
+    const res = await fetch(`${API_BASE}/api/incidents`);
+    incidents = await res.json();
+    const select = document.getElementById("incident-select");
+    incidents.forEach((inc, i) => {
+      const opt = document.createElement("option");
+      opt.value = i;
+      opt.textContent = `${inc.company} — ${inc.category}`;
+      select.appendChild(opt);
+    });
+  } catch (e) {
+    console.error("Failed to load incidents", e);
+  }
+}
+
+document.getElementById("incident-select").addEventListener("change", (e) => {
+  const idx = e.target.value;
+  const notesBox = document.getElementById("notes");
+  if (idx === "") {
+    selectedIncident = null;
+    notesBox.value = "";
+  } else {
+    selectedIncident = incidents[idx];
+    notesBox.value = selectedIncident.raw_input;
+  }
+});
+
+function renderField(label, value) {
+  if (Array.isArray(value)) {
+    return `<div class="field"><div class="field-label">${label}</div>
+      <ul>${value.map(v => `<li class="field-value">${v}</li>`).join("")}</ul></div>`;
+  }
+  return `<div class="field"><div class="field-label">${label}</div>
+    <div class="field-value">${value || ""}</div></div>`;
+}
+
+function renderGeneratedCard(gen) {
+  return `<div class="card"><h3>AI-Generated</h3>
+    ${renderField("Summary", gen.summary)}
+    ${renderField("Root Cause", gen.root_cause)}
+    ${renderField("Impact", gen.impact)}
+    ${renderField("Timeline", gen.timeline)}
+    ${renderField("Action Items", gen.action_items)}
+    </div>`;
+}
+
+function renderRealCard(description, link) {
+  return `<div class="card"><h3>Original (Reference)</h3>
+    <div class="field-value">${description}</div>
+    <div class="field" style="margin-top:14px;"><a href="${link}" target="_blank">View real postmortem &rarr;</a></div>
+    </div>`;
+}
+
+document.getElementById("generate-btn").addEventListener("click", async () => {
+  const notes = document.getElementById("notes").value.trim();
+  if (!notes) {
+    alert("Please paste incident notes or select an example first.");
+    return;
+  }
+
+  document.getElementById("screen-input").classList.remove("active");
+  document.getElementById("screen-output").classList.add("active");
+  document.getElementById("loading").style.display = "block";
+  document.getElementById("compare-container").style.display = "none";
+  document.getElementById("score-container").style.display = "none";
+
+  try {
+    const genRes = await fetch(`${API_BASE}/api/generate-postmortem`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ raw_input: notes })
+    });
+    const generated = await genRes.json();
+
+    if (generated.error) {
+      document.getElementById("loading").textContent = "Error: " + generated.error;
+      return;
+    }
+
+    const compareContainer = document.getElementById("compare-container");
+
+    if (selectedIncident) {
+      compareContainer.className = "compare";
+      compareContainer.innerHTML =
+        renderGeneratedCard(generated) +
+        renderRealCard(selectedIncident.description, selectedIncident.link);
+
+      const scoreRes = await fetch(`${API_BASE}/api/score`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          real_description: selectedIncident.description,
+          generated: generated
+        })
+      });
+      const judgment = await scoreRes.json();
+      if (judgment.score) {
+        document.getElementById("score-badge").textContent = `Score: ${judgment.score}/5`;
+        document.getElementById("score-reason").textContent = judgment.reason || "";
+        document.getElementById("score-container").style.display = "block";
+      }
+    } else {
+      compareContainer.className = "compare single";
+      compareContainer.innerHTML = renderGeneratedCard(generated);
+    }
+
+    document.getElementById("loading").style.display = "none";
+    compareContainer.style.display = "grid";
+
+  } catch (e) {
+    document.getElementById("loading").textContent = "Error connecting to backend. Is app.py running?";
+    console.error(e);
+  }
+});
+
+document.getElementById("back-btn").addEventListener("click", () => {
+  document.getElementById("screen-output").classList.remove("active");
+  document.getElementById("screen-input").classList.add("active");
+});
+
+loadIncidents();
+</script>
+</body>
+</html>
